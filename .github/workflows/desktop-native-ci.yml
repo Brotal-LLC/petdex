@@ -105,7 +105,7 @@ jobs:
         env:
           NATIVE_SDK_REMOTE: "https://github.com/Railly/native.git"
           NATIVE_SDK_BRANCH: "feat/floating-window-0.5.3"
-          NATIVE_SDK_REF: "af0812f19567112727fde53e9dbfd20ef35272be"
+          NATIVE_SDK_REF: "a3956694151b4cc0ac169bdec853b7d3534395a3"
         shell: bash
         run: |
           set -euo pipefail
@@ -247,7 +247,11 @@ jobs:
           # arrive transitively via libgtk-4-dev -> libglib2.0-dev, but a
           # transitive dependency is not a contract, and dbus-daemon and
           # desktop-file-utils are on neither runner image list.
-          sudo apt-get install -y libglib2.0-bin desktop-file-utils dbus-daemon xvfb imagemagick
+          # x11-utils for xdpyinfo, which is how the display check below
+          # avoids starting a second Xvfb on a display that already has
+          # one. Named here rather than leaned on from the hook-server
+          # step, so this step does not depend on that one having run.
+          sudo apt-get install -y libglib2.0-bin desktop-file-utils dbus-daemon xvfb imagemagick x11-utils
 
           # The GTK host resolves its scheme through a .desktop entry, so
           # one has to exist before anything can be opened. `native package
@@ -284,8 +288,21 @@ jobs:
           # the link would launch a second process instead of reaching the
           # running one, which is the case this step exists to prove.
           export DISPLAY=:99
-          Xvfb :99 -screen 0 1280x800x24 &
-          sleep 3
+          # The hook-server step already started Xvfb on :99 and left it
+          # running, so starting a second one here dies with "Server is
+          # already active for display 99" and every app launched below
+          # then has no display at all. Reuse it, and only start one if
+          # that step was skipped.
+          xdpyinfo -display :99 >/dev/null 2>&1 || {
+            Xvfb :99 -screen 0 1280x800x24 &
+            sleep 3
+          }
+          # That step also leaves its own app instance behind. GApplication
+          # is single-instance per app id, so a survivor would answer the
+          # link from OUTSIDE this D-Bus session, where the scenario below
+          # can neither see it nor assert on it.
+          pkill -f petdex-desktop-native || true
+          sleep 2
 
           cat > /tmp/deeplink.sh <<'SCENARIO'
           set -euo pipefail
