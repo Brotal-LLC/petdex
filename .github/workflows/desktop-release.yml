@@ -49,10 +49,14 @@ jobs:
         # zero-native clone above is: a mutable fork branch must not be able
         # to change what a tagged release contains. Point NATIVE_SDK_REMOTE
         # and NATIVE_SDK_REF at vercel-labs/main once those land upstream.
+        # Kept identical to desktop-native-ci.yml's pin on purpose: that
+        # workflow is the only thing that runs these binaries, so a
+        # release built from a different SDK commit is untested by
+        # construction. Moving one pin without the other is the bug.
         env:
           NATIVE_SDK_REMOTE: "https://github.com/Railly/native.git"
           NATIVE_SDK_BRANCH: "feat/floating-window-0.5.3"
-          NATIVE_SDK_REF: "b749ae5eb6fd759cc49871d2d00ae33d9fd05542"
+          NATIVE_SDK_REF: "af0812f19567112727fde53e9dbfd20ef35272be"
         # Explicit bash: this job now runs on a Windows runner too, where
         # the default shell is PowerShell and `set -euo pipefail` fails
         # as an unknown parameter before git is ever reached.
