@@ -252,6 +252,40 @@ pub const CatalogEntry = struct {
 pub var catalog: [max_catalog]CatalogEntry = @splat(.{});
 pub var catalog_len: usize = 0;
 
+/// Slug to catalog index, the lookup both entry points into "pick this
+/// pet" share: boot resolution (env/settings) and the petdex:// deep
+/// link. Null means not installed, which each caller answers
+/// differently — boot falls back to the first pet, a deep link ignores
+/// the URL.
+fn catalogIndexOf(slug: []const u8) ?usize {
+    if (slug.len == 0) return null;
+    for (catalog[0..catalog_len], 0..) |*entry, i| {
+        if (std.mem.eql(u8, entry.slice(), slug)) return i;
+    }
+    return null;
+}
+
+const url_scheme_prefix = "petdex://";
+
+/// `petdex://<slug>` swaps the active pet (petdex-desktop-link.ts on the
+/// site builds these). The URLs are borrowed for the dispatch only, so
+/// the slug is resolved to an index here and nothing outlives the Msg.
+///
+/// `petdex://install?slug=…` is the site's other form and is ignored on
+/// purpose: installing pets was the CLI's job and the app has no
+/// installer, so answering it would fake a swap the user never gets.
+fn onUrlsOpened(urls: []const []const u8) ?Msg {
+    for (urls) |url| {
+        if (!std.mem.startsWith(u8, url, url_scheme_prefix)) continue;
+        var slug = url[url_scheme_prefix.len..];
+        // NSURL hands back the absoluteString, and a bare host round
+        // trips as `petdex://slug/`.
+        if (std.mem.indexOfAny(u8, slug, "/?#")) |cut| slug = slug[0..cut];
+        if (catalogIndexOf(slug)) |index| return .{ .select_pet = @intCast(index) };
+    }
+    return null;
+}
+
 pub const PosSample = struct { x: f64 = 0, y: f64 = 0, t_ms: i64 = 0 };
 
 const physics_timer_key: u64 = 3;
@@ -660,12 +694,7 @@ fn resolveInitialPet(io: std.Io, allocator: std.mem.Allocator, environ_map: *std
             }
         }
     }
-    var index: usize = 0;
-    if (wanted.len > 0) {
-        for (catalog[0..catalog_len], 0..) |*entry, i| {
-            if (std.mem.eql(u8, entry.slice(), wanted)) index = i;
-        }
-    }
+    const index = catalogIndexOf(wanted) orelse 0;
     initial_pet = @intCast(index);
     pet_display_name = catalog[index].slice();
 }
@@ -1647,6 +1676,7 @@ pub fn main(init: std.process.Init) !void {
         .on_key = onKey,
         .on_command = onCommand,
         .on_frame = onFrame,
+        .on_urls_opened = onUrlsOpened,
         .windows_fn = petdexWindows,
         .window_view = petdexWindowView,
         .tokens_fn = petdexTokens,
