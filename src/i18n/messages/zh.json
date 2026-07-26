@@ -1871,7 +1871,7 @@
       },
       "desktop": {
         "title": "桌面应用",
-        "intro": "Petdex Desktop 是一个漂浮在工作区上的桌面宠物，会根据 Agent 的工具调用做出反应。目前支持 macOS，Linux 和 Windows 稍后支持。视觉介绍见 <download>/download</download>。",
+        "intro": "Petdex Desktop 是一个漂浮在工作区上的桌面宠物，会根据 Agent 的工具调用做出反应。支持 macOS、Linux 和 Windows。视觉介绍见 <download>/download</download>。",
         "installDesktopBody": "从 GitHub Releases 拉取适合当前平台的最新二进制文件，并放到 <code>~/.petdex/bin/petdex-desktop</code>。CLI 会移除 macOS quarantine 属性，让应用打开时不再触发 Gatekeeper 提示。",
         "hooksInstallBody": "把桌面应用接入你的 Agent，让宠物在你工作时摇摆。CLI 会识别本机已有的 Agent，并分别写入 hooks：",
         "hookEvents": "工具事件会映射到宠物状态：<code>tool.before</code> → <code>running</code>，<code>tool.after</code> → <code>idle</code>，<code>session.end</code> → <code>waving</code>，<code>session.error</code> → <code>failed</code>。每个 hook 都会 POST 到本地 sidecar：<code>http://127.0.0.1:7777/state</code>。",
@@ -1890,7 +1890,20 @@
         "doctorBody": "诊断命令。会检查二进制文件、sidecar bundle、sidecar 可达性、pid 文件格式、token 权限、kill-switch 状态、各 Agent 是否安装 hooks、Codex 的 <code>codex_hooks</code> feature flag，以及可用宠物数量。每个失败项都会给出可执行的提示。",
         "updateBody": "比较本机已安装版本和最新 GitHub Release tag，如果有更新就下载。若桌面应用正在运行，会先停止、替换二进制，再重新启动。传入 <code>--force</code> 可以重新下载同一版本。",
         "sidecarCallout": "Sidecar 是运行在本机 <code>7777</code> 端口的 HTTP server。任何能 <code>curl</code> 并读取每次会话 token（<code>~/.petdex/runtime/update-token</code>）的程序都能驱动宠物。这个 token 每次 sidecar 启动都会轮换，文件权限是 <code>0600</code>，只有当前用户能读；浏览器和远程网站不能直接访问：",
-        "manageSyntax": "petdex desktop {desktopAction}"
+        "manageSyntax": "petdex desktop {desktopAction}",
+        "windowTitle": "Living with the pet",
+        "windowBody": "The pet floats above every window and never steals focus. Clicks pass straight through the activity bubble to whatever is behind it, so a message appearing over your editor cannot swallow a keystroke. The sprite itself stays draggable: pick it up and drop it wherever it belongs on your screen.",
+        "shortcutsTitle": "Shortcuts",
+        "shortcutsBody": "Hover the pet and press <kbd>Cmd</kbd> + <kbd>,</kbd> to open Settings, or <kbd>Cmd</kbd> + <kbd>W</kbd> to send it away. Both also live in the Pet menu while the app is focused.",
+        "settingsTitle": "What is in Settings",
+        "settingsPets": "<strong>Pets.</strong> Search your installed pets, preview each one, and switch the active pet without restarting. Every custom pet you drop in the pets folder shows up here.",
+        "settingsAgents": "<strong>Agents.</strong> Shows which coding agents are on this machine and whether their hooks are wired. Install or disconnect any of them in one click; the app writes the hook files itself, no terminal involved.",
+        "settingsAppearance": "<strong>Appearance.</strong> Scale the sprite, and turn the activity bubble on or off if you would rather have the pet stay quiet.",
+        "chatgptTitle": "ChatGPT pets",
+        "chatgptBody": "ChatGPT exports pets as a 1536x2288 spritesheet, which is exactly the atlas Petdex already reads: same nine state rows, same frame counts. A pet made there works here with no conversion.",
+        "chatgptImport": "<strong>Bringing one in.</strong> Download the spritesheet from ChatGPT, then drop the PNG on <submit>/submit</submit>. Petdex measures the grid, generates the pet.json the export does not include, and shows an animated preview before you name it.",
+        "chatgptExport": "<strong>Taking one out.</strong> Every pet page has an Open in Codex button that installs it into the ChatGPT desktop app. Importing straight from a ChatGPT share link is not possible: those URLs are locked to the browser session that created them.",
+        "__fixme": true
       },
       "distribute": {
         "title": "分享上架你的宠物",

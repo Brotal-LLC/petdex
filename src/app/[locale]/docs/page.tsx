@@ -76,6 +76,11 @@ export default async function DocsPage({
     code: (chunks: React.ReactNode) => <code>{chunks}</code>,
     em: (chunks: React.ReactNode) => <em>{chunks}</em>,
     strong: (chunks: React.ReactNode) => <strong>{chunks}</strong>,
+    kbd: (chunks: React.ReactNode) => (
+      <kbd className="rounded border border-border-base bg-surface px-1.5 py-0.5 font-mono text-[0.85em]">
+        {chunks}
+      </kbd>
+    ),
     ...placeholder,
   };
 
@@ -444,6 +449,46 @@ export default async function DocsPage({
                 ].join("\n")}
               </pre>
             </Callout>
+
+            <h3 className="mt-8 font-semibold">
+              {t("sections.desktop.windowTitle")}
+            </h3>
+            <p>{t("sections.desktop.windowBody")}</p>
+
+            <h3 className="mt-6 font-semibold">
+              {t("sections.desktop.shortcutsTitle")}
+            </h3>
+            <p>{t.rich("sections.desktop.shortcutsBody", rich)}</p>
+
+            <h3 className="mt-6 font-semibold">
+              {t("sections.desktop.settingsTitle")}
+            </h3>
+            <ul className="ml-6 list-disc space-y-1 text-muted-2">
+              <li>{t.rich("sections.desktop.settingsPets", rich)}</li>
+              <li>{t.rich("sections.desktop.settingsAgents", rich)}</li>
+              <li>{t.rich("sections.desktop.settingsAppearance", rich)}</li>
+            </ul>
+
+            <h3 className="mt-8 font-semibold">
+              {t("sections.desktop.chatgptTitle")}
+            </h3>
+            <p>{t("sections.desktop.chatgptBody")}</p>
+            <ul className="mt-3 ml-6 list-disc space-y-2 text-muted-2">
+              <li>
+                {t.rich("sections.desktop.chatgptImport", {
+                  ...rich,
+                  submit: (chunks) => (
+                    <Link
+                      href={`/${locale}/submit`}
+                      className="text-brand underline underline-offset-4"
+                    >
+                      {chunks}
+                    </Link>
+                  ),
+                })}
+              </li>
+              <li>{t.rich("sections.desktop.chatgptExport", rich)}</li>
+            </ul>
           </Section>
 
           <Section id="distribute" title={t("sections.distribute.title")}>

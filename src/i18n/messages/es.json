@@ -1569,7 +1569,7 @@
       },
       "desktop": {
         "title": "Desktop app",
-        "intro": "Petdex Desktop is a floating mascot that lives on top of your workspace and reacts to your coding agent tool calls. macOS today, Linux and Windows soon. See <download>/download</download> for the visual tour.",
+        "intro": "Petdex Desktop is a floating mascot that lives on top of your workspace and reacts to your coding agent tool calls. macOS, Linux and Windows. See <download>/download</download> for the visual tour.",
         "installDesktopBody": "Fetches the latest binary from GitHub Releases for your platform and drops it at <code>~/.petdex/bin/petdex-desktop</code>. The CLI strips the macOS quarantine attribute so the app opens without a Gatekeeper prompt.",
         "hooksInstallBody": "Wires the desktop app into your coding agents so the pet animates as you work. Picks the agents present on your machine and writes hooks for each:",
         "hookEvents": "Tool events map to pet states: <code>tool.before</code> → <code>running</code>, <code>tool.after</code> → <code>idle</code>, <code>session.end</code> → <code>waving</code>, <code>session.error</code> → <code>failed</code>. Each hook POSTs to the local sidecar at <code>http://127.0.0.1:7777/state</code>.",
@@ -1588,7 +1588,19 @@
         "doctorBody": "Diagnostic. Verifies binary, sidecar bundle, sidecar reachability, pid file format, token mode, kill-switch state, hooks installed in each agent, Codex <code>codex_hooks</code> feature flag, and usable pet count. Each failed check ships an actionable hint.",
         "updateBody": "Compares your installed version against the latest GitHub Release tag and downloads it if newer. If the desktop app was running, it stops it, swaps the binary, and restarts. Pass <code>--force</code> to re-download the same version.",
         "sidecarCallout": "The sidecar is a local HTTP server on port <code>7777</code>. Anything that can <code>curl</code> + read the per-session token at <code>~/.petdex/runtime/update-token</code> can drive the pet. The token rotates every sidecar boot and lives at mode <code>0600</code>, so only your user can read it. Browsers and remote sites cannot:",
-        "manageSyntax": "petdex desktop {desktopAction}"
+        "manageSyntax": "petdex desktop {desktopAction}",
+        "windowTitle": "Convivir con la mascota",
+        "windowBody": "La mascota flota sobre todas las ventanas y nunca roba el foco. Los clics atraviesan la burbuja de actividad hacia lo que haya detrás, así que un mensaje sobre tu editor no puede tragarse una tecla. El sprite sí se arrastra: agarralo y soltalo donde quieras.",
+        "shortcutsTitle": "Atajos",
+        "shortcutsBody": "Pasá el cursor sobre la mascota y apretá <kbd>Cmd</kbd> + <kbd>,</kbd> para abrir Ajustes, o <kbd>Cmd</kbd> + <kbd>W</kbd> para guardarla. Los dos están también en el menú Pet mientras la app tiene el foco.",
+        "settingsTitle": "Qué hay en Ajustes",
+        "settingsPets": "<strong>Mascotas.</strong> Buscá entre las instaladas, previsualizá cada una y cambiá la activa sin reiniciar. Cada mascota que dejes en la carpeta aparece acá.",
+        "settingsAgents": "<strong>Agentes.</strong> Muestra qué agentes de código hay en la máquina y si sus hooks están conectados. Instalá o desconectá cualquiera con un clic; la app escribe los hooks sola, sin terminal.",
+        "settingsAppearance": "<strong>Apariencia.</strong> Ajustá el tamaño del sprite y apagá la burbuja de actividad si preferís que la mascota esté callada.",
+        "chatgptTitle": "Mascotas de ChatGPT",
+        "chatgptBody": "ChatGPT exporta mascotas como spritesheet de 1536x2288, que es exactamente el atlas que Petdex ya lee: las mismas nueve filas de estados, los mismos conteos de frames. Una mascota hecha allá funciona acá sin conversión.",
+        "chatgptImport": "<strong>Traer una.</strong> Descargá la spritesheet desde ChatGPT y soltá el PNG en <submit>/submit</submit>. Petdex mide la grilla, genera el pet.json que la exportación no trae, y te muestra una vista previa animada antes de ponerle nombre.",
+        "chatgptExport": "<strong>Llevarte una.</strong> Cada página de mascota tiene un botón Open in Codex que la instala en la app de escritorio de ChatGPT. Importar directo desde un link para compartir de ChatGPT no se puede: esas URLs están atadas a la sesión del navegador que las creó."
       },
       "distribute": {
         "title": "Distribute your pets",
