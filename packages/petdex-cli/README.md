@@ -24,15 +24,19 @@ Requires Node.js 20+ (also runs on Bun).
 petdex login                       # opens browser, OAuth + PKCE via Clerk
 petdex list                        # browse approved pets
 petdex install boba                # drops boba into ~/.codex/pets/boba/
-petdex select                      # pick active mascot from installed pets (interactive)
-petdex select boba                 # set active mascot directly
 petdex submit ~/.codex/pets/boba   # share a single pet
 petdex submit ~/.codex/pets        # bulk submit every subfolder
 petdex whoami                      # confirm signed-in identity
 petdex logout                      # clear stored credentials
 ```
 
-After installing a pet, set it as active with `petdex select` or inside Codex: **Settings → Appearance → Pets → Select**. Use `/pet` inside Codex to wake or tuck it away.
+After installing a pet, pick the active mascot in the Petdex desktop app (right-click the mascot or use Settings), or inside Codex: **Settings → Appearance → Pets → Select**.
+
+## Desktop app
+
+The floating mascot ships as the **Petdex desktop app**, not through this CLI. The app installs agent hooks from its Settings window (one click per agent) and updates itself. Download it at <https://petdex.dev/download>.
+
+The `init`, `up`, `down`, `toggle`, `desktop`, `update`, `doctor`, and `hooks` commands were removed in v1.0.0; running them prints a pointer to the app.
 
 ## Commands
 
@@ -43,8 +47,9 @@ After installing a pet, set it as active with `petdex select` or inside Codex: *
 | `petdex whoami` | Print the signed-in user's identity. |
 | `petdex list` | List approved pets in the gallery. |
 | `petdex install <slug>` | Install a pet into `~/.codex/pets/<slug>/` and `~/.petdex/pets/<slug>/`. |
-| `petdex select [slug]` | Set the active pet shown by Petdex Desktop. No args = interactive picker; pass a slug to skip the prompt. |
 | `petdex submit <path>` | Submit a pet folder, zip, or parent of pets (bulk). |
+| `petdex edit <slug>` | Edit a pet you own (`--desc`, `--displayName`, `--sprite`, `--meta`, `--zip`). |
+| `petdex telemetry [on\|off\|status]` | Manage anonymous usage telemetry. |
 | `petdex --version` | Print the CLI version. |
 
 ## How `submit` works
