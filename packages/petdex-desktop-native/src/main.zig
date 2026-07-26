@@ -21,6 +21,7 @@ const hook_server = @import("hook_server.zig");
 const hook_runner = @import("hook_runner.zig");
 const agent_hooks = @import("agent_hooks.zig");
 const plat = @import("plat.zig");
+const installer = @import("installer.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
@@ -134,6 +135,10 @@ pub const Msg = union(enum) {
     uninstall_agent: u32,
     pet_filter: canvas.TextInputEvent,
     toggle_pets_expanded,
+    manifest_done: native_sdk.EffectExit,
+    pet_json_done: native_sdk.EffectExit,
+    spritesheet_done: native_sdk.EffectExit,
+    dismiss_install_error,
     noop,
 
     pub const view_unbound = .{ "frame_tick", "poll_tick", "physics_tick", "frame_clock", "cycle_state" };
@@ -192,6 +197,7 @@ pub const Model = struct {
     pet_filter: [48]u8 = @splat(0),
     pet_filter_len: usize = 0,
     pets_expanded: bool = false,
+    install: InstallState = .{},
     dark: bool = true,
     high_contrast: bool = false,
     reduce_motion: bool = false,
@@ -235,7 +241,12 @@ fn onAppearance(appearance: native_sdk.platform.Appearance) ?Msg {
     return .{ .appearance = appearance };
 }
 
-pub const max_catalog = 32;
+// 32 silently truncated real installs: this machine had 47 pets across
+// the two roots, so 15 of them never reached Settings. The ceiling is
+// the thumbnail atlas, which registers as one image and has to fit the
+// registry's 1MB slot: 96 cells of 48x52 is 0.91MB, and 128 would be
+// 1.22MB.
+pub const max_catalog = 96;
 pub const CatalogEntry = struct {
     name: [64]u8 = @splat(0),
     len: usize = 0,
@@ -265,25 +276,352 @@ fn catalogIndexOf(slug: []const u8) ?usize {
     return null;
 }
 
+// ---------------------------------------------------------------- install
+// `petdex://<slug>` for a pet that is not on disk downloads it first.
+// The bytes ride `fx.spawn` (curl/wget), never `fx.fetch`: a buffered
+// fetch caps at 256 KB and a streamed one frames by lines, while real
+// spritesheets are 1 to 3 MB. See installer.zig.
+
+/// Slugs waiting to be installed. A deep link can name several, and the
+/// URL slices it arrives on are borrowed for the dispatch only, so each
+/// slug is COPIED here before anything asynchronous starts.
+const max_install_queue = 8;
+
+const InstallPhase = enum { idle, manifest, pet_json, spritesheet };
+
+pub const InstallState = struct {
+    phase: InstallPhase = .idle,
+    queue: [max_install_queue][64]u8 = @splat(@splat(0)),
+    queue_len: [max_install_queue]usize = @splat(0),
+    queued: usize = 0,
+    /// Index into `queue` of the pet being downloaded right now.
+    current: usize = 0,
+    /// Set when the deep link was `petdex://<slug>` rather than
+    /// `petdex://install?…`: that form means "use this pet", so the
+    /// install activates it on completion.
+    activate_when_done: bool = false,
+    /// Chosen once per install so pet.json and the spritesheet land
+    /// under matching names (`spritesheet.png` vs `.webp`).
+    ext_png: bool = false,
+    /// Last failure, shown in Settings until dismissed. Empty means the
+    /// install either succeeded or never ran.
+    error_text: [96]u8 = @splat(0),
+    error_len: usize = 0,
+    installed_ok: usize = 0,
+
+    pub fn currentSlug(self: *const InstallState) []const u8 {
+        if (self.current >= self.queued) return "";
+        return self.queue[self.current][0..self.queue_len[self.current]];
+    }
+
+    pub fn errorSlice(self: *const InstallState) []const u8 {
+        return self.error_text[0..self.error_len];
+    }
+
+    pub fn busy(self: *const InstallState) bool {
+        return self.phase != .idle;
+    }
+
+    /// Copy a slug off a borrowed URL slice. Rejected slugs never enter
+    /// the queue, so nothing downstream has to re-validate a path.
+    pub fn enqueue(self: *InstallState, slug: []const u8) bool {
+        if (self.queued >= max_install_queue) return false;
+        if (!installer.slugOk(slug)) return false;
+        for (0..self.queued) |i| {
+            if (std.mem.eql(u8, self.queue[i][0..self.queue_len[i]], slug)) return false;
+        }
+        @memcpy(self.queue[self.queued][0..slug.len], slug);
+        self.queue_len[self.queued] = slug.len;
+        self.queued += 1;
+        return true;
+    }
+
+    pub fn setError(self: *InstallState, comptime fmt: []const u8, args: anytype) void {
+        const written = std.fmt.bufPrint(&self.error_text, fmt, args) catch {
+            self.error_len = 0;
+            return;
+        };
+        self.error_len = written.len;
+    }
+};
+
+const manifest_key: u64 = 20;
+const pet_json_key: u64 = 21;
+const spritesheet_key: u64 = 22;
+
+/// Where the manifest lands while a slug is resolved. It is 1.4 MB of
+/// JSON for 4145 pets, so it is never held in the model — curl writes
+/// it here, one pet's URLs are read out, and the file is deleted.
+fn manifestTmpPath(buf: []u8) ?[]const u8 {
+    const home = env_home orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/.petdex/manifest-download.json", .{home}) catch null;
+}
+
+/// Manifest read bound. The live manifest is 1.4 MB and grows with the
+/// catalog, so this leaves headroom rather than tracking it exactly; a
+/// manifest past the cap is read truncated and the slug simply is not
+/// found, which surfaces as a normal "not in the manifest" error.
+const max_manifest_bytes: usize = 8 * 1024 * 1024;
+
+fn petdexDirsFor(slug: []const u8) void {
+    const home = env_home orelse return;
+    var buf: [512]u8 = undefined;
+    for (installer.install_roots) |root| {
+        const dir = installer.petDir(&buf, home, root, slug) orelse continue;
+        plat.makeDir(dir);
+    }
+}
+
+/// Start (or continue) the queue: fetch the manifest once, then walk the
+/// pets. The manifest is re-fetched per install run rather than cached,
+/// so a pet approved after the app launched is still installable.
+fn startInstallQueue(model: *Model, fx: *Effects) void {
+    if (model.install.busy() or model.install.queued == 0) return;
+    if (installer.detect() == null) {
+        std.debug.print("{s}", .{installer.missing_downloader_note});
+        model.install.setError("No downloader: install curl", .{});
+        model.install.queued = 0;
+        return;
+    }
+    const home = env_home orelse return;
+    _ = home;
+    var path_buf: [512]u8 = undefined;
+    const dest = manifestTmpPath(&path_buf) orelse return;
+    const which = installer.detect() orelse return;
+    var argv_buf: [installer.max_argv][]const u8 = undefined;
+    model.install.phase = .manifest;
+    model.install.current = 0;
+    model.install.installed_ok = 0;
+    model.install.error_len = 0;
+    fx.spawn(.{
+        .key = manifest_key,
+        .argv = installer.downloadArgv(which, &argv_buf, installer.manifest_url, dest),
+        .output = .collect,
+        .on_exit = Effects.exitMsg(.manifest_done),
+    });
+}
+
+/// Resolve the current slug against the downloaded manifest and start
+/// its pet.json. Returns false when the pet cannot be installed, which
+/// advances the queue rather than stalling it.
+fn beginCurrentPet(model: *Model, fx: *Effects) bool {
+    const home = env_home orelse return false;
+    const slug = model.install.currentSlug();
+    if (slug.len == 0) return false;
+
+    var path_buf: [512]u8 = undefined;
+    const manifest_path = manifestTmpPath(&path_buf) orelse return false;
+    const manifest = plat.readFileAlloc(boot_allocator, manifest_path, max_manifest_bytes) orelse {
+        model.install.setError("Manifest download failed", .{});
+        return false;
+    };
+    defer boot_allocator.free(manifest);
+
+    const urls = installer.findPetUrls(manifest, slug) orelse {
+        model.install.setError("{s} is not in the catalog", .{slug});
+        return false;
+    };
+    // The host check happens before a single byte is requested: an
+    // approved-but-stale row could carry a URL off the asset origin,
+    // and the app must not write those bytes to a pet directory.
+    if (!installer.isTrustedAssetUrl(urls.pet_json) or !installer.isTrustedAssetUrl(urls.spritesheet)) {
+        model.install.setError("{s} has an untrusted asset host", .{slug});
+        return false;
+    }
+    model.install.ext_png = std.mem.eql(u8, urls.spritesheetExt(), "png");
+    petdexDirsFor(slug);
+
+    var dest_buf: [512]u8 = undefined;
+    const dest = installer.petFile(&dest_buf, home, installer.install_roots[0], slug, "pet.json") orelse return false;
+    const which = installer.detect() orelse return false;
+    var argv_buf: [installer.max_argv][]const u8 = undefined;
+    model.install.phase = .pet_json;
+    fx.spawn(.{
+        .key = pet_json_key,
+        .argv = installer.downloadArgv(which, &argv_buf, urls.pet_json, dest),
+        .output = .collect,
+        .on_exit = Effects.exitMsg(.pet_json_done),
+    });
+    return true;
+}
+
+/// pet.json is down; pull the spritesheet into the same directory.
+fn beginSpritesheet(model: *Model, fx: *Effects) bool {
+    const home = env_home orelse return false;
+    const slug = model.install.currentSlug();
+    if (slug.len == 0) return false;
+
+    var path_buf: [512]u8 = undefined;
+    const manifest_path = manifestTmpPath(&path_buf) orelse return false;
+    const manifest = plat.readFileAlloc(boot_allocator, manifest_path, max_manifest_bytes) orelse return false;
+    defer boot_allocator.free(manifest);
+    const urls = installer.findPetUrls(manifest, slug) orelse return false;
+    if (!installer.isTrustedAssetUrl(urls.spritesheet)) return false;
+
+    var name_buf: [32]u8 = undefined;
+    const name = std.fmt.bufPrint(&name_buf, "spritesheet.{s}", .{urls.spritesheetExt()}) catch return false;
+    var dest_buf: [512]u8 = undefined;
+    const dest = installer.petFile(&dest_buf, home, installer.install_roots[0], slug, name) orelse return false;
+    const which = installer.detect() orelse return false;
+    var argv_buf: [installer.max_argv][]const u8 = undefined;
+    model.install.phase = .spritesheet;
+    fx.spawn(.{
+        .key = spritesheet_key,
+        .argv = installer.downloadArgv(which, &argv_buf, urls.spritesheet, dest),
+        .output = .collect,
+        .on_exit = Effects.exitMsg(.spritesheet_done),
+    });
+    return true;
+}
+
+/// Copy the finished pet into the second root. The CLI downloads each
+/// asset twice; copying the bytes already on disk costs one read
+/// instead of a second round trip over the network.
+fn mirrorToCodexRoot(slug: []const u8, ext_png: bool) void {
+    const home = env_home orelse return;
+    var name_buf: [32]u8 = undefined;
+    const sheet_name = std.fmt.bufPrint(&name_buf, "spritesheet.{s}", .{if (ext_png) "png" else "webp"}) catch return;
+    for ([_][]const u8{ "pet.json", sheet_name }) |name| {
+        var src_buf: [512]u8 = undefined;
+        var dst_buf: [512]u8 = undefined;
+        const src = installer.petFile(&src_buf, home, installer.install_roots[0], slug, name) orelse continue;
+        const dst = installer.petFile(&dst_buf, home, installer.install_roots[1], slug, name) orelse continue;
+        const bytes = plat.readFileAlloc(boot_allocator, src, max_sheet_file_bytes) orelse continue;
+        defer boot_allocator.free(bytes);
+        _ = plat.writeFile(dst, bytes);
+    }
+}
+
+/// Add a freshly installed pet to the in-memory catalog. A rescan would
+/// need a `std.Io`, and the only one the app holds belongs to the main
+/// thread, so the entry is appended directly — same shape `scanCatalog`
+/// writes.
+///
+/// The catalog holds `max_catalog` entries and `scanCatalog` fills it
+/// from both roots at boot, so on a machine with more pets than slots
+/// (49 here against 32) it is already full before any install runs.
+/// Dropping the new pet would install it to disk and leave it
+/// unselectable, so a full catalog evicts instead: the pet the user just
+/// asked for by name outranks whichever one the boot scan happened to
+/// land on last. The evicted entry is only a listing — its files stay on
+/// disk and the next boot rescans them.
+fn catalogAppend(slug: []const u8, active: usize) ?usize {
+    if (catalogIndexOf(slug)) |existing| return existing;
+    const root = installer.install_roots[0];
+    const slot = if (catalog_len < max_catalog) blk: {
+        catalog_len += 1;
+        break :blk catalog_len - 1;
+    } else evict: {
+        // Never evict the pet currently on screen: its decoded sheet is
+        // live and the entry backs the name the window is showing.
+        var victim: usize = max_catalog - 1;
+        if (victim == active and max_catalog > 1) victim -= 1;
+        break :evict victim;
+    };
+    var e = &catalog[slot];
+    e.* = .{};
+    @memcpy(e.name[0..slug.len], slug);
+    e.len = slug.len;
+    @memcpy(e.root[0..root.len], root);
+    e.root_len = root.len;
+    // A reused slot may still carry the evicted pet's thumbnail, so the
+    // atlas cell has to be rebuilt before the row draws it.
+    thumbs_ready[slot] = false;
+    return slot;
+}
+
+/// Move to the next queued pet, or finish the run. Finishing deletes
+/// the manifest scratch file: 1.4 MB is not worth keeping around, and a
+/// stale copy would resolve slugs against an old catalog.
+fn advanceInstallQueue(model: *Model, fx: *Effects) void {
+    model.install.current += 1;
+    while (model.install.current < model.install.queued) {
+        if (beginCurrentPet(model, fx)) return;
+        model.install.current += 1;
+    }
+    model.install.phase = .idle;
+    model.install.queued = 0;
+    var path_buf: [512]u8 = undefined;
+    if (manifestTmpPath(&path_buf)) |path| plat.deleteFile(path);
+}
+
 const url_scheme_prefix = "petdex://";
 
-/// `petdex://<slug>` swaps the active pet (petdex-desktop-link.ts on the
-/// site builds these). The URLs are borrowed for the dispatch only, so
-/// the slug is resolved to an index here and nothing outlives the Msg.
+/// Slugs a deep link asked for, staged for `update`.
 ///
-/// `petdex://install?slug=…` is the site's other form and is ignored on
-/// purpose: installing pets was the CLI's job and the app has no
-/// installer, so answering it would fake a swap the user never gets.
+/// `on_urls_opened` maps a URL to one Msg and gets no `fx`, but an
+/// install needs to spawn effects, so the work cannot happen in the
+/// callback. The URL slices are borrowed for the dispatch only — they
+/// are dead by the time any download starts — so the slugs are copied
+/// here and the returned Msg is only a signal to drain this.
+var pending_install: InstallState = .{};
+var pending_ready: bool = false;
+
+/// `petdex://<slug>` selects a pet, installing it first when it is not
+/// on disk; `petdex://install?slug=a&slug=b` installs without
+/// selecting (petdex-desktop-link.ts builds both forms).
+///
+/// An already-installed pet still resolves to `select_pet` inside the
+/// callback, so the common case keeps its immediate swap and never
+/// touches the network.
 fn onUrlsOpened(urls: []const []const u8) ?Msg {
     for (urls) |url| {
         if (!std.mem.startsWith(u8, url, url_scheme_prefix)) continue;
-        var slug = url[url_scheme_prefix.len..];
+        const rest = url[url_scheme_prefix.len..];
+        const host = rest[0 .. std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len];
+
+        if (std.mem.eql(u8, host, "install")) {
+            const query = std.mem.indexOfScalar(u8, rest, '?') orelse continue;
+            pending_install = .{};
+            var it = std.mem.splitScalar(u8, rest[query + 1 ..], '&');
+            while (it.next()) |pair| {
+                if (!std.mem.startsWith(u8, pair, "slug=")) continue;
+                var value = pair["slug=".len..];
+                if (std.mem.indexOfScalar(u8, value, '#')) |cut| value = value[0..cut];
+                _ = pending_install.enqueue(value);
+            }
+            if (pending_install.queued == 0) continue;
+            pending_install.activate_when_done = false;
+            pending_ready = true;
+            return .noop;
+        }
+
         // NSURL hands back the absoluteString, and a bare host round
         // trips as `petdex://slug/`.
-        if (std.mem.indexOfAny(u8, slug, "/?#")) |cut| slug = slug[0..cut];
-        if (catalogIndexOf(slug)) |index| return .{ .select_pet = @intCast(index) };
+        if (catalogIndexOf(host)) |index| return .{ .select_pet = @intCast(index) };
+        pending_install = .{};
+        if (!pending_install.enqueue(host)) continue;
+        pending_install.activate_when_done = true;
+        pending_ready = true;
+        return .noop;
     }
     return null;
+}
+
+/// Move a staged deep link into the model and start it. Called from
+/// `update`, the first place with an `fx` to spawn on.
+fn drainPendingInstall(model: *Model, fx: *Effects) void {
+    if (!pending_ready) return;
+    pending_ready = false;
+    if (model.install.busy()) return;
+    const activate = pending_install.activate_when_done;
+    model.install.queued = 0;
+    for (0..pending_install.queued) |i| {
+        _ = model.install.enqueue(pending_install.queue[i][0..pending_install.queue_len[i]]);
+    }
+    model.install.activate_when_done = activate;
+    startInstallQueue(model, fx);
+    // A deep-link install arrives from the browser with no Petdex window
+    // in front of the user, so the progress banner would render into a
+    // closed Settings page. Opening it is the whole feedback channel.
+    if (model.install.busy() or model.install.error_len > 0) {
+        if (!model.settings_open) {
+            model.settings_open = true;
+            loadAgentsAtlas(model.dark, fx);
+        } else {
+            fx.focusWindow(settings_window_label);
+        }
+    }
 }
 
 pub const PosSample = struct { x: f64 = 0, y: f64 = 0, t_ms: i64 = 0 };
@@ -876,6 +1214,57 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             applyState(model, model.state.next(), 0, fx);
         },
         .toggle_pets_expanded => model.pets_expanded = !model.pets_expanded,
+        .dismiss_install_error => model.install.error_len = 0,
+        .manifest_done => |exit| {
+            if (model.install.phase != .manifest) return;
+            // A nonzero curl exit means no usable manifest on disk, so
+            // there is nothing to resolve any slug against: the whole
+            // queue ends here rather than failing pet by pet.
+            if (exit.reason != .exited or exit.code != 0) {
+                model.install.setError("Could not reach petdex.dev", .{});
+                model.install.phase = .idle;
+                model.install.queued = 0;
+                return;
+            }
+            model.install.current = 0;
+            if (!beginCurrentPet(model, fx)) advanceInstallQueue(model, fx);
+        },
+        .pet_json_done => |exit| {
+            if (model.install.phase != .pet_json) return;
+            if (exit.reason != .exited or exit.code != 0) {
+                model.install.setError("{s}: pet.json download failed", .{model.install.currentSlug()});
+                advanceInstallQueue(model, fx);
+                return;
+            }
+            if (!beginSpritesheet(model, fx)) {
+                model.install.setError("{s}: spritesheet unavailable", .{model.install.currentSlug()});
+                advanceInstallQueue(model, fx);
+            }
+        },
+        .spritesheet_done => |exit| {
+            if (model.install.phase != .spritesheet) return;
+            const slug = model.install.currentSlug();
+            if (exit.reason != .exited or exit.code != 0) {
+                model.install.setError("{s}: spritesheet download failed", .{slug});
+                advanceInstallQueue(model, fx);
+                return;
+            }
+            mirrorToCodexRoot(slug, model.install.ext_png);
+            model.install.installed_ok += 1;
+            // The pet is only usable once the catalog knows it; a fresh
+            // thumbnail pass picks it up the next time settings is open.
+            const index = catalogAppend(slug, model.active_pet);
+            thumbs_built = @min(thumbs_built, catalog_len);
+            if (model.install.activate_when_done) {
+                if (index) |i| {
+                    // Deliberately routed through the same Msg the
+                    // settings list uses, so activation after an install
+                    // cannot drift from activation by click.
+                    update(model, .{ .select_pet = @intCast(i) }, fx);
+                }
+            }
+            advanceInstallQueue(model, fx);
+        },
         .pet_filter => |edit| {
             switch (edit) {
                 .insert_text => |txt| {
@@ -1093,6 +1482,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .poll_tick => |timer| {
             if (timer.outcome != .fired) return;
+            // Ahead of the sheet guard on purpose: a machine with no pet
+            // installed has no sheet, and that is precisely when a
+            // `petdex://<slug>` link has work to do.
+            drainPendingInstall(model, fx);
             if (!model.sheet_loaded) return;
             if (model.settings_open and thumbs_built < catalog_len) buildNextThumb(fx);
             if (hook_server.mailbox.takeBubble(&model.bubble)) {
@@ -1492,6 +1885,42 @@ fn petMatchesFilter(name: []const u8, filter: []const u8) bool {
     return false;
 }
 
+var install_label_buf: [128]u8 = undefined;
+
+/// Download progress and the last failure, in the Settings page the app
+/// already has. A deep-link install is otherwise invisible: the pet just
+/// appears seconds later with no indication anything was happening.
+fn installBanner(ui: *AppUi, model: *const Model) AppUi.Node {
+    if (model.install.busy()) {
+        const slug = model.install.currentSlug();
+        const label = switch (model.install.phase) {
+            .manifest => std.fmt.bufPrint(&install_label_buf, "Looking up pets\u{2026}", .{}) catch "Looking up pets",
+            // The pet.json leg is a few hundred bytes and flashes past,
+            // so both download legs read as one "Downloading" step
+            // rather than flickering between two labels.
+            .pet_json, .spritesheet => std.fmt.bufPrint(&install_label_buf, "Downloading {s}\u{2026}", .{slug}) catch "Downloading pet",
+            .idle => unreachable,
+        };
+        return ui.el(.panel, .{ .padding = 12, .style_tokens = .{ .background = .surface, .radius = .md } }, .{
+            ui.row(.{ .gap = 10, .cross = .center }, .{
+                ui.el(.spinner, .{ .width = 16, .height = 16, .semantics = .{ .label = "Installing" } }, .{}),
+                ui.text(.{ .size = .sm }, label),
+            }),
+        });
+    }
+    if (model.install.error_len > 0) {
+        var message = ui.text(.{ .size = .sm }, model.install.errorSlice());
+        message.widget.style.foreground = canvas.Color.rgb8(250, 105, 94);
+        return ui.el(.panel, .{ .padding = 12, .style_tokens = .{ .background = .surface, .radius = .md } }, .{
+            ui.row(.{ .gap = 10, .cross = .center }, .{
+                ui.column(.{ .grow = 1 }, .{message}),
+                ui.button(.{ .size = .sm, .variant = .secondary, .on_press = .dismiss_install_error }, "Dismiss"),
+            }),
+        });
+    }
+    return ui.el(.stack, .{}, .{});
+}
+
 fn settingsView(ui: *AppUi, model: *const Model) AppUi.Node {
     var rows: [max_catalog]AppUi.Node = undefined;
     var shown: usize = 0;
@@ -1546,6 +1975,7 @@ fn settingsView(ui: *AppUi, model: *const Model) AppUi.Node {
     // more per-section band budgets.
     return ui.scroll(.{ .grow = 1 }, .{ui.column(.{ .padding = 16, .gap = 12 }, .{
         ui.text(.{ .size = .lg }, "Pets"),
+        installBanner(ui, model),
         ui.el(.search_field, .{
             .height = 34,
             .text = filter,
