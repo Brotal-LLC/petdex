@@ -997,9 +997,12 @@ export async function runInstallDesktop(): Promise<RunInstallDesktopResult> {
     }
 
     const binPath = desktopBinPath();
+    // A release without a sidecar is the normal case since 0.3.0: the
+    // native desktop runs the hook server in-process, so there is no
+    // Node script to fetch and nothing is degraded by its absence.
     const sidecarMsg = result.sidecarAsset
       ? `\n${pc.dim("•")} Sidecar at ${pc.cyan(tildeify(sidecarPath()))} (${formatBytes(result.sidecarAsset.size)})`
-      : `\n${pc.yellow("!")} No sidecar in this release. Hooks won't reach the mascot until a release ships ${SIDECAR_ASSET_NAME}.`;
+      : `\n${pc.dim("•")} Hook server runs inside the app, no sidecar needed.`;
     dl.stop(
       `${pc.green("✓")} Binary at ${pc.cyan(tildeify(binPath))} (${formatBytes(result.binAsset.size)})${sidecarMsg}`,
     );

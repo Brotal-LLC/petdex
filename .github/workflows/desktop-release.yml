@@ -11,74 +11,6 @@ on:
         required: true
 
 jobs:
-  build:
-    name: build ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: darwin-arm64
-            runner: macos-14
-            zig_target: ""
-          - target: darwin-x64
-            runner: macos-14
-            zig_target: x86_64-macos
-
-    steps:
-      - name: Checkout petdex
-        uses: actions/checkout@v7
-        with:
-          # Manual workflow_dispatch must build from inputs.tag, not from
-          # the branch the workflow file lives on. Tag pushes already
-          # arrive with github.ref pointing at the tag.
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Clone zero-native
-        # build.zig resolves zero-native from -Dzero-native-path flag, the
-        # ZERO_NATIVE_PATH env var, or ../../zero-native (in that order).
-        # CI passes the checkout path explicitly via the env var so we
-        # don't have to patch build.zig at runtime.
-        #
-        # Source defaults to Railly/zero-native:feature/window-resize because
-        # the floating-window options + window.resize + focusable flag aren't
-        # in vercel-labs/main yet. Pin the commit so a mutable fork branch
-        # cannot silently produce a desktop release without window.resize.
-        # Update ZERO_NATIVE_REMOTE / ZERO_NATIVE_BRANCH / ZERO_NATIVE_REF once
-        # everything merges upstream so CI can switch to vercel-labs/main.
-        env:
-          ZERO_NATIVE_REMOTE: "https://github.com/Railly/zero-native.git"
-          ZERO_NATIVE_BRANCH: "feature/window-resize"
-          ZERO_NATIVE_REF: "c85ec92a170c5b1304543ffcbf0c1d6d3e413498"
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch "$ZERO_NATIVE_BRANCH" "$ZERO_NATIVE_REMOTE" "$GITHUB_WORKSPACE/zero-native"
-          git -C "$GITHUB_WORKSPACE/zero-native" fetch --depth 1 origin "$ZERO_NATIVE_REF"
-          git -C "$GITHUB_WORKSPACE/zero-native" checkout --detach "$ZERO_NATIVE_REF"
-          echo "ZERO_NATIVE_PATH=$GITHUB_WORKSPACE/zero-native/" >> "$GITHUB_ENV"
-
-      - name: Install Zig 0.16.0
-        uses: mlugg/setup-zig@v2
-        with:
-          version: "0.16.0"
-
-      - name: Build petdex-desktop
-        working-directory: packages/petdex-desktop
-        run: |
-          zig_target_arg=""
-          if [ -n "${{ matrix.zig_target }}" ]; then
-            zig_target_arg="-Dtarget=${{ matrix.zig_target }}"
-          fi
-          zig build -Doptimize=ReleaseSafe $zig_target_arg -Dzero-native-path="$ZERO_NATIVE_PATH"
-          mv zig-out/bin/petdex-desktop "petdex-desktop-${{ matrix.target }}"
-          ls -lh "petdex-desktop-${{ matrix.target }}"
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: petdex-desktop-${{ matrix.target }}
-          path: packages/petdex-desktop/petdex-desktop-${{ matrix.target }}
-
   build-native:
     name: build native ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -173,7 +105,14 @@ jobs:
           # icon still has to survive packaging.
           test -f "Petdex.app/Contents/Resources/assets/icon.png"
           ditto -c -k --keepParent "Petdex.app" "petdex-desktop-native-${{ matrix.target }}.zip"
-          ls -lh "petdex-desktop-native-${{ matrix.target }}.zip"
+          # Upgrade bridge: the WebView desktop's updater and `petdex
+          # install desktop` both look for petdex-desktop-<target>, so
+          # the native binary answers to that name too. Without it the
+          # thousands of installs already out there would sit on 0.2.3
+          # forever, their updater asking for an asset nobody publishes.
+          cp zig-out/bin/petdex-desktop-native "petdex-desktop-${{ matrix.target }}"
+          chmod +x "petdex-desktop-${{ matrix.target }}"
+          ls -lh "petdex-desktop-native-${{ matrix.target }}.zip" "petdex-desktop-${{ matrix.target }}"
 
       - name: Stage the binary (Linux)
         if: matrix.target == 'linux-x64'
@@ -182,7 +121,12 @@ jobs:
         run: |
           cp zig-out/bin/petdex-desktop-native "petdex-desktop-native-${{ matrix.target }}"
           chmod +x "petdex-desktop-native-${{ matrix.target }}"
-          ls -lh "petdex-desktop-native-${{ matrix.target }}"
+          # Same upgrade bridge as macOS, though no Linux build ever
+          # shipped under the old name: publishing it keeps the asset
+          # table uniform across targets.
+          cp zig-out/bin/petdex-desktop-native "petdex-desktop-${{ matrix.target }}"
+          chmod +x "petdex-desktop-${{ matrix.target }}"
+          ls -lh "petdex-desktop-native-${{ matrix.target }}" "petdex-desktop-${{ matrix.target }}"
 
       - name: Stage the binary (Windows)
         if: matrix.target == 'win32-x64'
@@ -190,7 +134,10 @@ jobs:
         shell: bash
         run: |
           cp zig-out/bin/petdex-desktop-native.exe "petdex-desktop-native-${{ matrix.target }}.exe"
-          ls -lh "petdex-desktop-native-${{ matrix.target }}.exe"
+          # Upgrade bridge, as on macOS: 474 people downloaded
+          # petdex-desktop-win32-x64.exe from 0.2.3 alone.
+          cp zig-out/bin/petdex-desktop-native.exe "petdex-desktop-${{ matrix.target }}.exe"
+          ls -lh "petdex-desktop-native-${{ matrix.target }}.exe" "petdex-desktop-${{ matrix.target }}.exe"
 
       - name: Upload native bundle artifact
         uses: actions/upload-artifact@v7
@@ -202,82 +149,13 @@ jobs:
             packages/petdex-desktop-native/petdex-desktop-native-${{ matrix.target }}
             packages/petdex-desktop-native/petdex-desktop-native-${{ matrix.target }}.zip
             packages/petdex-desktop-native/petdex-desktop-native-${{ matrix.target }}.exe
+            packages/petdex-desktop-native/petdex-desktop-${{ matrix.target }}
+            packages/petdex-desktop-native/petdex-desktop-${{ matrix.target }}.exe
           if-no-files-found: error
-
-  sidecar:
-    name: build sidecar (server.js)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout petdex
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Build sidecar
-        working-directory: packages/petdex-desktop/sidecar
-        run: |
-          bun install --frozen-lockfile || bun install
-          bun run build
-          ls -lh server.js
-
-      - name: Upload sidecar artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: petdex-desktop-sidecar
-          path: packages/petdex-desktop/sidecar/server.js
-
-  build-windows:
-    name: build win32-x64
-    runs-on: windows-2022
-    steps:
-      - name: Checkout petdex
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Install Rust stable (x86_64-pc-windows-msvc)
-        # windows-2022 ships with Rust but pinning the toolchain + target
-        # makes the job reproducible across runner image updates.
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Cache Rust/Cargo build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/petdex-desktop-windows/src-tauri -> target
-
-      - name: Install Tauri CLI
-        # Install into the local cargo bin so the version is locked to what
-        # tauri.conf.json declares, not whatever the runner image happens to
-        # have. `--locked` ensures Cargo.lock is respected.
-        run: cargo install tauri-cli --version "^2" --locked
-
-      - name: Build petdex-desktop-win32-x64.exe
-        # `--no-bundle` skips NSIS/WiX installer generation (we ship the
-        # bare .exe per the CLI asset contract). `--bundles none` was
-        # removed in tauri-cli 2.x; `--no-bundle` is the correct flag.
-        # The binary name is driven by the [[bin]] entry in Cargo.toml.
-        working-directory: packages/petdex-desktop-windows
-        run: |
-          cargo tauri build --no-bundle
-          $exe = "src-tauri\target\release\petdex-desktop-win32-x64.exe"
-          if (-not (Test-Path $exe)) { throw "Binary not found at $exe" }
-          Write-Output "Binary size: $((Get-Item $exe).Length) bytes"
-          Copy-Item $exe "petdex-desktop-win32-x64.exe"
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: petdex-desktop-win32-x64
-          path: packages/petdex-desktop-windows/petdex-desktop-win32-x64.exe
 
   release:
     name: publish github release
-    needs: [build, build-native, build-windows, sidecar]
+    needs: [build-native]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -296,16 +174,13 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -type f -name "petdex-desktop-*" -exec cp {} release/ \;
-          if [ -f artifacts/petdex-desktop-sidecar/server.js ]; then
-            cp artifacts/petdex-desktop-sidecar/server.js release/petdex-desktop-sidecar.js
-          fi
-          test -f release/petdex-desktop-sidecar.js
-          test -f release/petdex-desktop-darwin-arm64
-          test -f release/petdex-desktop-darwin-x64
-          test -f release/petdex-desktop-win32-x64.exe
           test -f release/petdex-desktop-native-darwin-arm64.zip
           test -f release/petdex-desktop-native-linux-x64
           test -f release/petdex-desktop-native-win32-x64.exe
+          # The compatibility names existing installs update through.
+          test -f release/petdex-desktop-darwin-arm64
+          test -f release/petdex-desktop-linux-x64
+          test -f release/petdex-desktop-win32-x64.exe
           ls -lh release/
 
       - name: Create GitHub Release
