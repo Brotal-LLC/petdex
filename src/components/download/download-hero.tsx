@@ -11,6 +11,9 @@ import {
   useMacArch,
   usePlatform,
 } from "@/lib/use-platform";
+import { cn } from "@/lib/utils";
+
+import { buttonVariants } from "@/components/ui/button";
 
 const ASSET = {
   "darwin-arm64": "/api/desktop/latest-release?asset=darwin-arm64",
@@ -81,7 +84,13 @@ export function DownloadHero() {
             <a
               href={ASSET[primary.key]}
               rel="noreferrer"
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-brand px-7 text-[15px] font-semibold text-white transition hover:bg-brand-deep"
+              className={cn(
+                buttonVariants({
+                  variant: "petdex-cta",
+                  size: "petdex-pill",
+                  className: "h-12 gap-2 px-7 text-[15px]",
+                }),
+              )}
             >
               <ArrowDownToLine className="size-[18px]" />
               {t(`for.${primary.os}`)}

@@ -1,6 +1,9 @@
 # petdex
 
-The Petdex CLI: browse, install, and submit animated pets for [OpenAI Codex](https://openai.com/codex) from your terminal.
+The Petdex CLI: browse, install, and submit animated pets for your coding agents from your terminal.
+
+The pets themselves are shown by [Petdex Desktop](https://petdex.dev/download), which
+connects your agents from its own Settings window. This CLI is the catalog client.
 
 - **Gallery & docs:** <https://petdex.dev>
 - **Repo:** <https://github.com/crafter-station/petdex>
@@ -23,14 +26,15 @@ Requires Node.js 20+ (also runs on Bun).
 ```sh
 petdex login                       # opens browser, OAuth + PKCE via Clerk
 petdex list                        # browse approved pets
-petdex install boba                # drops boba into ~/.codex/pets/boba/
-petdex submit ~/.codex/pets/boba   # share a single pet
-petdex submit ~/.codex/pets        # bulk submit every subfolder
+petdex install boba                 # drops boba into ~/.petdex/pets/boba/
+petdex submit ~/.petdex/pets/boba   # share a single pet
+petdex submit ~/.petdex/pets        # bulk submit every subfolder
 petdex whoami                      # confirm signed-in identity
 petdex logout                      # clear stored credentials
 ```
 
-After installing a pet, pick the active mascot in the Petdex desktop app (right-click the mascot or use Settings), or inside Codex: **Settings → Appearance → Pets → Select**.
+After installing a pet, pick the active mascot in Petdex Desktop: hover the pet and
+press <kbd>Cmd</kbd>+<kbd>,</kbd> to open Settings.
 
 ## Desktop app
 
@@ -46,7 +50,7 @@ The `init`, `up`, `down`, `toggle`, `desktop`, `update`, `doctor`, and `hooks` c
 | `petdex logout` | Clear local credentials. |
 | `petdex whoami` | Print the signed-in user's identity. |
 | `petdex list` | List approved pets in the gallery. |
-| `petdex install <slug>` | Install a pet into `~/.codex/pets/<slug>/` and `~/.petdex/pets/<slug>/`. |
+| `petdex install <slug>` | Install a pet into `~/.petdex/pets/<slug>/` and `~/.codex/pets/<slug>/`. |
 | `petdex submit <path>` | Submit a pet folder, zip, or parent of pets (bulk). |
 | `petdex edit <slug>` | Edit a pet you own (`--desc`, `--displayName`, `--sprite`, `--meta`, `--zip`). |
 | `petdex telemetry [on\|off\|status]` | Manage anonymous usage telemetry. |
@@ -57,9 +61,9 @@ The `init`, `up`, `down`, `toggle`, `desktop`, `update`, `doctor`, and `hooks` c
 The CLI accepts three input shapes:
 
 ```sh
-petdex submit ~/.codex/pets/boba       # single folder (must contain pet.json + spritesheet.{webp,png})
+petdex submit ~/.petdex/pets/boba      # single folder (must contain pet.json + spritesheet.{webp,png})
 petdex submit ~/Downloads/boba.zip     # single zip with the same root layout
-petdex submit ~/.codex/pets            # parent folder: every subfolder containing pet.json is submitted
+petdex submit ~/.petdex/pets           # parent folder: every subfolder containing pet.json is submitted
 ```
 
 Per submission the CLI:
@@ -74,7 +78,8 @@ A spinner shows progress per pet; a summary lists failures with reasons. Slugs a
 ## Validation rules
 
 - `pet.json` and `spritesheet.webp` (or `.png`) must exist at the root.
-- Spritesheet ≥ 256×256. Recommended **1536×1872** (8×9 frame grid).
+- Spritesheet must be an 8x9 grid (**1536x1872**) or a v2 8x11 grid (**1536x2288**),
+  or a clean scale of either. ChatGPT pet exports are already the v2 shape.
 - Rate limit: **10 submissions / 24h** per user. Admins bypass.
 
 ## Configuration
@@ -97,15 +102,17 @@ petdex login
 
 The flow uses the [`@clerk/cli-auth`](https://github.com/Railly/clerk-cli-auth-example) reference implementation, vendored into this package.
 
-## How to make a pet (creation lives inside Codex)
+## How to make a pet
 
-This CLI distributes pets. It does not generate them. To create one:
+This CLI distributes pets. It does not generate them.
 
-1. Open the **Codex desktop app** (download at <https://openai.com/codex>).
-2. Go to **Skills** in the top navbar → install **Hatch Pet**.
-3. In a Codex chat, type `/pet` and describe what you want (e.g. *"a tiny otter sipping bubble tea"*).
-4. Codex generates the spritesheet and animations into `~/.codex/pets/<slug>/`.
-5. Submit it: `petdex submit ~/.codex/pets/<slug>`.
+**In the ChatGPT desktop app.** Type `/pet` and describe what you want, then submit
+the folder it writes: `petdex submit ~/.codex/pets/<slug>`.
+
+**From a ChatGPT pet export.** ChatGPT exports a 1536x2288 spritesheet, which is the
+same atlas Petdex reads: nine state rows, matching frame counts. Download the PNG and
+drop it on <https://petdex.dev/submit>. The grid is measured for you and the `pet.json`
+the export omits is generated before you name it.
 
 The full step-by-step (with tips on what makes a great pet) lives at <https://petdex.dev/create>.
 
@@ -116,22 +123,22 @@ The full step-by-step (with tips on what makes a great pet) lives at <https://pe
 | `Not signed in` | No tokens or session expired | `petdex login` |
 | `presign 401` | Bearer rejected by Clerk userinfo | `petdex logout && petdex login` |
 | `presign 429` | 10/24h rate limit hit | Wait 24h or open a [submit-fallback issue](https://github.com/crafter-station/petdex/issues/new?labels=submit-fallback) |
-| `register 400 invalid_spritesheet` | Sprite < 256×256 | Regenerate with bigger dims (recommend 1536×1872) |
-| `register 400 missing_field` | Folder missing `pet.json` or `spritesheet.{webp,png}` | Inspect folder contents, re-export from Codex if needed |
+| `register 400 invalid_spritesheet` | Not an 8x9 or 8x11 grid | Re-export at 1536x1872 or 1536x2288 |
+| `register 400 missing_field` | Folder missing `pet.json` or `spritesheet.{webp,png}` | Inspect folder contents, re-export the pet if needed |
 | `R2 PUT 403` | Presigned URL expired (60s TTL) | Retry the failed submission. CLI auto-presigns fresh URLs |
 
 ## Common install issues
 
 The CLI is a single bundled JS file with no native dependencies.
 install path is just `fetch a JSON manifest, write two files to
-~/.codex/pets/<slug>/`. Most "stuck" reports trace to one of these:
+~/.petdex/pets/<slug>/`. Most "stuck" reports trace to one of these:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Hangs at `Need to install the following packages: petdex@x` | `npx`'s own confirmation prompt, not a hang. Press `y` or auto-confirm | `npx -y petdex install <slug>` |
 | `npm ERR! engine Unsupported engine` | Node < 20 | Upgrade Node to 20+ (`nvm install 20` is the easiest path) |
 | `manifest fetch 5xx` / network timeout | Slow connection or corporate/national firewall blocking `petdex.dev` | Set a proxy: `HTTPS_PROXY=http://your.proxy:port npx petdex install <slug>` |
-| `EACCES: permission denied … ~/.codex/pets/` | Pets dir owned by another user | `sudo chown -R "$USER" ~/.codex` or remove the dir and retry |
+| `EACCES: permission denied … ~/.petdex/pets/` | Pets dir owned by another user | `sudo chown -R "$USER" ~/.petdex` or remove the dir and retry |
 | Windows: `'sh' is not recognized` | CLI version older than 0.1.1 piped through `curl … \| sh` | Upgrade: `npm i -g petdex@latest` or `npx petdex@latest install <slug>` |
 
 The CLI bundles `@clack/prompts`, `picocolors`, and `jszip` into the
