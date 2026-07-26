@@ -1615,7 +1615,7 @@
       "binaryVersion": "已安装的桌面端版本，例如 <code>0.1.4</code>。只会在 <code>cli_install_desktop_success</code> 时发送。",
       "os": "操作系统：<code>darwin</code>、<code>linux</code> 或 <code>win32</code>。",
       "arch": "CPU 架构：<code>arm64</code> 或 <code>x64</code>。",
-      "agents": "运行 <code>petdex hooks install</code> 时接入了哪些 Agent，例如 <code>[\"claude-code\", \"codex\"]</code>。只会在 <code>cli_hooks_install_success</code> 事件中发送。",
+      "agents": "桌面应用接入了哪些 Agent，例如 <code>[\"claude-code\", \"codex\"]</code>。只会在 <code>cli_hooks_install_success</code> 事件中发送。",
       "state": "第一个 hook 触发的宠物动画状态，例如 <code>running</code>、<code>idle</code> 或 <code>waving</code>。只会在 <code>desktop_first_state_received</code> 时发送。",
       "agentSource": "触发第一个 hook 的 Agent 可以附带一个来源标签，例如 <code>claude-code</code>。最多 64 个字符，并且只有 hook 命令主动带上它时才发送。",
       "country": "由 Vercel edge 根据 IP 推断出的两位国家代码。原始 IP 不会被存储。"
@@ -1820,8 +1820,9 @@
           },
           "desktop": {
             "title": "初始化桌面应用和 hooks",
-            "body": "如果你想让宠物浮在桌面上，并响应 coding agent 的活动，就运行完整初始化。",
-            "result": "Petdex 会下载并启动桌面应用，同时给支持的 agent 接上 <code>/petdex</code>。"
+            "body": "下载桌面应用。它会在设置窗口里连接你的编程智能体，无需终端。",
+            "result": "宠物漂浮在工作区上方，对每次工具调用做出反应。",
+            "link": "下载 Petdex Desktop"
           },
           "select": {
             "title": "在应用中选择宠物",
@@ -1872,25 +1873,7 @@
       "desktop": {
         "title": "桌面应用",
         "intro": "Petdex Desktop 是一个漂浮在工作区上的桌面宠物，会根据 Agent 的工具调用做出反应。支持 macOS、Linux 和 Windows。视觉介绍见 <download>/download</download>。",
-        "installDesktopBody": "从 GitHub Releases 拉取适合当前平台的最新二进制文件，并放到 <code>~/.petdex/bin/petdex-desktop</code>。CLI 会移除 macOS quarantine 属性，让应用打开时不再触发 Gatekeeper 提示。",
-        "hooksInstallBody": "把桌面应用接入你的 Agent，让宠物在你工作时摇摆。CLI 会识别本机已有的 Agent，并分别写入 hooks：",
-        "hookEvents": "工具事件会映射到宠物状态：<code>tool.before</code> → <code>running</code>，<code>tool.after</code> → <code>idle</code>，<code>session.end</code> → <code>waving</code>，<code>session.error</code> → <code>failed</code>。每个 hook 都会 POST 到本地 sidecar：<code>http://127.0.0.1:7777/state</code>。",
-        "desktopManageBody": "管理正在运行的宠物。<code>start</code> 会以 detached 方式启动（PID 在 <code>~/.petdex/desktop.pid</code>，日志在 <code>~/.petdex/desktop.log</code>）。<code>stop</code> 发送 SIGTERM。<code>status</code> 显示 running、stopped 或 stale。",
-        "toggleBody": "一次性切换桌面宠物的 wake 或 sleep 状态。<code>up</code> 会启用 hooks 并启动 desktop；<code>down</code> 会禁用 hooks 并停止 desktop；<code>toggle</code> 根据当前状态切换。这也是你在 Agent 里运行 <code>/petdex</code> 时触发的命令。",
-        "slashTitleSuffix": "（斜杠命令）",
-        "slashBody": "运行过 <code>petdex hooks install</code> 后，每个受支持的 Agent（Claude Code、Codex、Gemini、OpenCode）都会获得 <code>/petdex</code> 命令。你可以在 Agent 里直接输入它，让宠物 wake 或 sleep，不需要离开当前对话：",
-        "slashToggle": "<code>/petdex</code>：切换状态（sleep 时切到 wake，wake 时切到 sleep）",
-        "slashUp": "<code>/petdex up</code>：切到 wake 状态",
-        "slashDown": "<code>/petdex down</code>：切到 sleep 状态",
-        "slashStatus": "<code>/petdex status</code>：查看 hooks 是否启用",
-        "slashDoctor": "<code>/petdex doctor</code>：诊断安装和 Agent 接入状态",
-        "killSwitchSuffix": "（开关）",
-        "hooksKillBody": "即使已经安装 hooks，也可以暂停它们，而不必改动 Agent 配置。<code>petdex hooks off</code> 会在 <code>~/.petdex/runtime/hooks-disabled</code> 写入一个标记文件；所有已安装 hook 都会先检查它，命中后直接退出 0。<code>petdex hooks on</code> 会删除这个文件。适合 sidecar 异常时临时停用。",
-        "uninstallBody": "撤销 <code>hooks install</code>：从每个 Agent 配置中移除 petdex 项（保留你自己的 hooks），删除 <code>/petdex</code> 斜杠命令文件，并移除 OpenCode 插件。传入 <code>--remove-token</code> 还会删除 <code>~/.petdex/runtime/update-token</code> 里的 auth token。",
-        "doctorBody": "诊断命令。会检查二进制文件、sidecar bundle、sidecar 可达性、pid 文件格式、token 权限、kill-switch 状态、各 Agent 是否安装 hooks、Codex 的 <code>codex_hooks</code> feature flag，以及可用宠物数量。每个失败项都会给出可执行的提示。",
-        "updateBody": "比较本机已安装版本和最新 GitHub Release tag，如果有更新就下载。若桌面应用正在运行，会先停止、替换二进制，再重新启动。传入 <code>--force</code> 可以重新下载同一版本。",
         "sidecarCallout": "Sidecar 是运行在本机 <code>7777</code> 端口的 HTTP server。任何能 <code>curl</code> 并读取每次会话 token（<code>~/.petdex/runtime/update-token</code>）的程序都能驱动宠物。这个 token 每次 sidecar 启动都会轮换，文件权限是 <code>0600</code>，只有当前用户能读；浏览器和远程网站不能直接访问：",
-        "manageSyntax": "petdex desktop {desktopAction}",
         "windowTitle": "Living with the pet",
         "windowBody": "The pet floats above every window and never steals focus. Clicks pass straight through the activity bubble to whatever is behind it, so a message appearing over your editor cannot swallow a keystroke. The sprite itself stays draggable: pick it up and drop it wherever it belongs on your screen.",
         "shortcutsTitle": "Shortcuts",

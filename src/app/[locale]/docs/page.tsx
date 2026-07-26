@@ -173,11 +173,12 @@ export default async function DocsPage({
                   rich,
                 )}
               >
-                <CommandLine
-                  command="npx petdex init"
-                  source="docs-quickstart-init"
-                  className="w-full max-w-xl"
-                />
+                <Link
+                  href={`/${locale}/download`}
+                  className="text-brand underline underline-offset-4"
+                >
+                  {t("sections.quickStart.steps.desktop.link")}
+                </Link>
               </QuickStartStep>
               <QuickStartStep
                 number="3"
@@ -190,13 +191,7 @@ export default async function DocsPage({
                 title={t("sections.quickStart.steps.verify.title")}
                 body={t.rich("sections.quickStart.steps.verify.body", rich)}
                 result={t.rich("sections.quickStart.steps.verify.result", rich)}
-              >
-                <CommandLine
-                  command="npx petdex doctor"
-                  source="docs-quickstart-doctor"
-                  className="w-full max-w-xl"
-                />
-              </QuickStartStep>
+              />
             </ol>
             <Callout>
               {t.rich("sections.quickStart.callout", {
@@ -326,116 +321,6 @@ export default async function DocsPage({
                 ),
               })}
             </p>
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex install desktop</code>
-            </h3>
-            <p>{t.rich("sections.desktop.installDesktopBody", rich)}</p>
-            <CommandLine
-              command="npx petdex install desktop"
-              source="docs-desktop-install"
-              className="w-full max-w-xl"
-            />
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex hooks install</code>
-            </h3>
-            <p>{t("sections.desktop.hooksInstallBody")}</p>
-            <ul className="ml-6 list-disc space-y-1 text-muted-2">
-              <li>
-                <strong>Claude Code</strong>:{" "}
-                <code>~/.claude/settings.json</code>
-              </li>
-              <li>
-                <strong>Codex CLI</strong>: <code>~/.codex/hooks.json</code>
-              </li>
-              <li>
-                <strong>Gemini CLI</strong>:{" "}
-                <code>~/.gemini/settings.json</code>
-              </li>
-              <li>
-                <strong>OpenCode</strong>:{" "}
-                <code>~/.config/opencode/plugins/petdex.js</code>
-              </li>
-            </ul>
-            <p>{t.rich("sections.desktop.hookEvents", rich)}</p>
-            <CommandLine
-              command="npx petdex hooks install"
-              source="docs-desktop-hooks"
-              className="w-full max-w-xl"
-            />
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex desktop &lt;start | stop | status&gt;</code>
-            </h3>
-            <p>{t.rich("sections.desktop.desktopManageBody", rich)}</p>
-            <CommandLine
-              command="npx petdex desktop start"
-              source="docs-desktop-start"
-              className="w-full max-w-xl"
-            />
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex up / down / toggle</code>
-            </h3>
-            <p>{t.rich("sections.desktop.toggleBody", rich)}</p>
-            <CommandLine
-              command="npx petdex toggle"
-              source="docs-desktop-toggle"
-              className="w-full max-w-xl"
-            />
-
-            <h3 className="mt-6 font-semibold">
-              <code>/petdex</code> {t("sections.desktop.slashTitleSuffix")}
-            </h3>
-            <p>{t.rich("sections.desktop.slashBody", rich)}</p>
-            <ul className="ml-6 list-disc space-y-1 text-muted-2">
-              <li>{t.rich("sections.desktop.slashToggle", rich)}</li>
-              <li>{t.rich("sections.desktop.slashUp", rich)}</li>
-              <li>{t.rich("sections.desktop.slashDown", rich)}</li>
-              <li>{t.rich("sections.desktop.slashStatus", rich)}</li>
-              <li>{t.rich("sections.desktop.slashDoctor", rich)}</li>
-            </ul>
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex hooks</code> {t("sections.desktop.killSwitchSuffix")}
-            </h3>
-            <p>{t.rich("sections.desktop.hooksKillBody", rich)}</p>
-            <CommandLine
-              command="npx petdex hooks toggle"
-              source="docs-hooks-toggle"
-              className="w-full max-w-xl"
-            />
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex hooks uninstall</code>
-            </h3>
-            <p>{t.rich("sections.desktop.uninstallBody", rich)}</p>
-            <CommandLine
-              command="npx petdex hooks uninstall"
-              source="docs-hooks-uninstall"
-              className="w-full max-w-xl"
-            />
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex doctor</code>
-            </h3>
-            <p>{t.rich("sections.desktop.doctorBody", rich)}</p>
-            <CommandLine
-              command="npx petdex doctor"
-              source="docs-doctor"
-              className="w-full max-w-xl"
-            />
-
-            <h3 className="mt-6 font-semibold">
-              <code>petdex update</code>
-            </h3>
-            <p>{t.rich("sections.desktop.updateBody", rich)}</p>
-            <CommandLine
-              command="npx petdex update"
-              source="docs-desktop-update"
-              className="w-full max-w-xl"
-            />
 
             <Callout>
               {t.rich("sections.desktop.sidecarCallout", rich)}

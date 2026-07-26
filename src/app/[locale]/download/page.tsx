@@ -1,13 +1,11 @@
-import Image from "next/image";
 import Link from "next/link";
 
 import { ArrowRight, MonitorSmartphone, Pointer, Zap } from "lucide-react";
-import { getLocale, type getMessages, getTranslations } from "next-intl/server";
+import { getLocale, getTranslations } from "next-intl/server";
 
 import { buildLocaleAlternates } from "@/lib/locale-routing";
 
 import { DownloadHero } from "@/components/download/download-hero";
-import { StaticPetSprite } from "@/components/pets/static-pet-sprite";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
@@ -143,131 +141,5 @@ export default async function DownloadPage() {
 
       <SiteFooter />
     </main>
-  );
-}
-
-function _getDownloadSetupTemplates(
-  messages: Awaited<ReturnType<typeof getMessages>>,
-) {
-  return {
-    installPetTitle: getMessageString(
-      messages,
-      ["download", "setup", "installPet", "title"],
-      "Install {slug}",
-    ),
-    installPetsTitle: getMessageString(
-      messages,
-      ["download", "setup", "installPets", "title"],
-      "Install {count} pets",
-    ),
-  };
-}
-
-function getMessageString(messages: unknown, path: string[], fallback: string) {
-  let current = messages;
-  for (const part of path) {
-    if (!current || typeof current !== "object" || !(part in current)) {
-      return fallback;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return typeof current === "string" ? current : fallback;
-}
-
-function _DesktopActivationPreview({
-  pendingLabel,
-  pendingPet,
-  title,
-  status,
-  terminalLabel,
-  agentLabel,
-  petLabel,
-}: {
-  pendingLabel: string | null;
-  pendingPet: { displayName: string; spritesheetPath: string } | null;
-  title: string;
-  status: string;
-  terminalLabel: string;
-  agentLabel: string;
-  petLabel: string;
-}) {
-  return (
-    <div className="relative min-w-0 overflow-hidden rounded-lg border border-border-base bg-surface p-4 shadow-[0_32px_90px_-60px_rgba(15,23,42,0.6)]">
-      <div className="absolute inset-x-0 top-0 h-1 bg-brand" />
-      <div className="flex items-center gap-2 border-border-base border-b pb-3">
-        <span className="size-3 rounded-full bg-rose-400" />
-        <span className="size-3 rounded-full bg-amber-400" />
-        <span className="size-3 rounded-full bg-emerald-400" />
-        <span className="ml-2 truncate text-xs font-medium text-muted-3">
-          Petdex Desktop
-        </span>
-      </div>
-
-      <div className="grid gap-4 pt-5 sm:grid-cols-[1fr_160px]">
-        <div className="space-y-3">
-          <div className="rounded-lg border border-border-base bg-background p-4">
-            <p className="text-xs font-medium text-muted-3">{terminalLabel}</p>
-            <div className="mt-3 space-y-2 font-mono text-xs">
-              <p>
-                <span className="text-brand">$</span>{" "}
-                <span className="text-foreground">npx petdex init</span>
-              </p>
-              <p className="text-muted-3">✓ {agentLabel}</p>
-              <p className="text-muted-3">✓ {petLabel}</p>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border-base bg-background p-4">
-            <div className="flex items-start gap-3">
-              <div className="relative size-12 shrink-0">
-                <Image
-                  src="/brand/petdex-desktop-icon.png"
-                  alt=""
-                  fill
-                  className="object-contain"
-                  sizes="48px"
-                />
-              </div>
-              <div className="min-w-0">
-                <p className="font-semibold text-foreground">{title}</p>
-                <p className="mt-1 text-sm leading-5 text-muted-2">{status}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="relative min-h-[210px] overflow-hidden rounded-lg border border-border-base bg-[linear-gradient(135deg,var(--surface-muted),var(--surface))] p-3">
-          <div className="absolute inset-x-3 top-3 rounded-lg border border-border-base bg-surface/80 p-3">
-            <div className="h-2 w-24 rounded-full bg-border-base" />
-            <div className="mt-2 h-2 w-16 rounded-full bg-border-base/70" />
-          </div>
-          {pendingPet ? (
-            <div className="pet-sprite-stage absolute right-4 bottom-7 grid size-28 place-items-center rounded-lg border border-brand/20 bg-surface shadow-xl">
-              <StaticPetSprite
-                src={pendingPet.spritesheetPath}
-                state="idle"
-                scale={0.46}
-                label={pendingPet.displayName}
-              />
-            </div>
-          ) : (
-            <div className="absolute right-5 bottom-7 grid size-24 place-items-center rounded-lg border border-brand/20 bg-surface shadow-xl">
-              <Image
-                src="/brand/petdex-desktop-icon.png"
-                alt="Petdex Desktop"
-                width={80}
-                height={80}
-                className="object-contain"
-              />
-            </div>
-          )}
-          {pendingLabel ? (
-            <span className="absolute bottom-3 left-3 max-w-[120px] truncate rounded-lg bg-brand px-2 py-1 text-xs font-medium text-on-inverse">
-              {pendingLabel}
-            </span>
-          ) : null}
-        </div>
-      </div>
-    </div>
   );
 }

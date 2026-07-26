@@ -1351,7 +1351,7 @@
       "binaryVersion": "Version of the desktop binary that was installed, for example <code>0.1.4</code>. Only sent on <code>cli_install_desktop_success</code>.",
       "os": "Operating system: <code>darwin</code>, <code>linux</code>, or <code>win32</code>.",
       "arch": "CPU architecture: <code>arm64</code> or <code>x64</code>.",
-      "agents": "Which coding agents were wired up during <code>petdex hooks install</code>, for example <code>[\"claude-code\", \"codex\"]</code>. Only sent on <code>cli_hooks_install_success</code>.",
+      "agents": "Which coding agents were wired up by the desktop app, for example <code>[\"claude-code\", \"codex\"]</code>. Only sent on <code>cli_hooks_install_success</code>.",
       "state": "Sprite animation state the first hook triggered, for example <code>running</code>, <code>idle</code>, or <code>waving</code>. Only sent on <code>desktop_first_state_received</code>.",
       "agentSource": "Optional self-reported label of the agent that fired the first hook, for example <code>claude-code</code>. Capped at 64 characters and only sent if the hook command included it.",
       "country": "Two-letter ISO country code inferred from your IP by Vercel edge infrastructure. The raw IP is never stored."
@@ -1522,8 +1522,9 @@
           },
           "desktop": {
             "title": "Initialize desktop and hooks",
-            "body": "Run the full setup when you want the floating desktop mascot and agent activity hooks.",
-            "result": "Petdex downloads the desktop app, starts it, and wires supported agents for <code>/petdex</code>."
+            "body": "Get the desktop app. It connects your coding agents from its Settings window, no terminal needed.",
+            "result": "The pet floats above your workspace and reacts to every tool call.",
+            "link": "Download Petdex Desktop"
           },
           "select": {
             "title": "Select the pet in the app",
@@ -1570,25 +1571,7 @@
       "desktop": {
         "title": "Desktop app",
         "intro": "Petdex Desktop is a floating mascot that lives on top of your workspace and reacts to your coding agent tool calls. macOS, Linux and Windows. See <download>/download</download> for the visual tour.",
-        "installDesktopBody": "Fetches the latest binary from GitHub Releases for your platform and drops it at <code>~/.petdex/bin/petdex-desktop</code>. The CLI strips the macOS quarantine attribute so the app opens without a Gatekeeper prompt.",
-        "hooksInstallBody": "Wires the desktop app into your coding agents so the pet animates as you work. Picks the agents present on your machine and writes hooks for each:",
-        "hookEvents": "Tool events map to pet states: <code>tool.before</code> → <code>running</code>, <code>tool.after</code> → <code>idle</code>, <code>session.end</code> → <code>waving</code>, <code>session.error</code> → <code>failed</code>. Each hook POSTs to the local sidecar at <code>http://127.0.0.1:7777/state</code>.",
-        "desktopManageBody": "Manage the running pet. <code>start</code> spawns it detached (PID at <code>~/.petdex/desktop.pid</code>, log at <code>~/.petdex/desktop.log</code>). <code>stop</code> sends SIGTERM. <code>status</code> reports running, stopped, or stale.",
-        "toggleBody": "One-shot wake/sleep for the mascot. <code>up</code> enables hooks AND launches the desktop. <code>down</code> disables hooks AND stops the desktop. <code>toggle</code> flips between them based on current state. That is what the <code>/petdex</code> slash command runs from inside your agent.",
-        "slashTitleSuffix": "(slash command)",
-        "slashBody": "Once <code>petdex hooks install</code> has run, every supported agent (Claude Code, Codex, Gemini, OpenCode) gets a <code>/petdex</code> command in its picker. Type it inside the agent and the mascot wakes or sleeps without leaving the chat:",
-        "slashToggle": "<code>/petdex</code>: toggle (wake if asleep, sleep if awake)",
-        "slashUp": "<code>/petdex up</code>: force-wake",
-        "slashDown": "<code>/petdex down</code>: force-sleep",
-        "slashStatus": "<code>/petdex status</code>: show whether hooks are enabled",
-        "slashDoctor": "<code>/petdex doctor</code>: diagnose install + agent wiring",
-        "killSwitchSuffix": "(kill-switch)",
-        "hooksKillBody": "Even with hooks installed, you can pause them without touching your agent settings. <code>petdex hooks off</code> drops a flag file at <code>~/.petdex/runtime/hooks-disabled</code>; every installed hook checks for it first and exits 0 immediately. <code>petdex hooks on</code> removes the file. Useful when a sidecar has gone weird and you do not want stray curls in your agent log.",
-        "uninstallBody": "Reverses <code>hooks install</code>: removes the petdex entries from each agent config (preserving your own hooks), deletes the <code>/petdex</code> slash command files, and removes the OpenCode plugin. Pass <code>--remove-token</code> to also drop the auth token at <code>~/.petdex/runtime/update-token</code>.",
-        "doctorBody": "Diagnostic. Verifies binary, sidecar bundle, sidecar reachability, pid file format, token mode, kill-switch state, hooks installed in each agent, Codex <code>codex_hooks</code> feature flag, and usable pet count. Each failed check ships an actionable hint.",
-        "updateBody": "Compares your installed version against the latest GitHub Release tag and downloads it if newer. If the desktop app was running, it stops it, swaps the binary, and restarts. Pass <code>--force</code> to re-download the same version.",
         "sidecarCallout": "The sidecar is a local HTTP server on port <code>7777</code>. Anything that can <code>curl</code> + read the per-session token at <code>~/.petdex/runtime/update-token</code> can drive the pet. The token rotates every sidecar boot and lives at mode <code>0600</code>, so only your user can read it. Browsers and remote sites cannot:",
-        "manageSyntax": "petdex desktop {desktopAction}",
         "windowTitle": "Living with the pet",
         "windowBody": "The pet floats above every window and never steals focus. Clicks pass straight through the activity bubble to whatever is behind it, so a message appearing over your editor cannot swallow a keystroke. The sprite itself stays draggable: pick it up and drop it wherever it belongs on your screen.",
         "shortcutsTitle": "Shortcuts",
