@@ -35,3 +35,29 @@ jobs:
 
       - name: Install with frozen lockfile
         run: bun install --frozen-lockfile
+
+  sdk-pin-match:
+    name: SDK pins agree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # desktop-native-ci and desktop-release each pin the Native SDK
+    # commit they clone. They drifted once already: the CI moved to a
+    # commit carrying the deep-link work while the release stayed
+    # behind, which makes a green CI say nothing about the binary that
+    # ships. Same class of silent drift as package.json vs bun.lock.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Compare NATIVE_SDK_REF across the desktop workflows
+        run: |
+          set -euo pipefail
+          ci=$(grep -oE 'NATIVE_SDK_REF: *"[0-9a-f]+"' .github/workflows/desktop-native-ci.yml | grep -oE '[0-9a-f]{40}')
+          rel=$(grep -oE 'NATIVE_SDK_REF: *"[0-9a-f]+"' .github/workflows/desktop-release.yml | grep -oE '[0-9a-f]{40}')
+          echo "desktop-native-ci: $ci"
+          echo "desktop-release:   $rel"
+          test -n "$ci" || { echo "no NATIVE_SDK_REF found in desktop-native-ci.yml"; exit 1; }
+          test -n "$rel" || { echo "no NATIVE_SDK_REF found in desktop-release.yml"; exit 1; }
+          [ "$ci" = "$rel" ] || {
+            echo "FAIL: the CI and the release would build different SDK commits"; exit 1; }
