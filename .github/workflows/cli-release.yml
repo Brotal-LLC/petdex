@@ -1,25 +1,36 @@
 name: cli-release
 
+# Publishing is driven by the version field, not by a tag: bump
+# packages/petdex-cli/package.json, merge, and this ships it. The old
+# flow needed a `cli-v*` tag whose number had to be kept in sync with
+# package.json by hand, which is a step that exists only to be
+# forgotten.
+#
+# Auth is npm trusted publishing (OIDC), so there is no NPM_TOKEN to
+# rotate or leak. It needs this repo and workflow registered as a
+# trusted publisher on npmjs.com, plus npm 11.5.1+ on the runner, which
+# is why npm is updated before publish.
+
 on:
   push:
-    tags:
-      - "cli-v*"
+    branches: [main]
+    paths:
+      - "packages/petdex-cli/package.json"
   workflow_dispatch:
-    inputs:
-      dist-tag:
-        description: "npm dist-tag to publish under"
-        required: false
-        default: "latest"
+
+concurrency:
+  group: cli-release
+  cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
+  id-token: write
 
 jobs:
   publish:
     name: Publish petdex CLI to npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: npm-publish
 
     defaults:
       run:
@@ -38,34 +49,68 @@ jobs:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
 
-      - name: Verify tag matches package.json version
-        if: startsWith(github.ref, 'refs/tags/cli-v')
+      - name: Detect version change
+        id: version
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME#cli-v}"
-          pkg="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$pkg" ]; then
-            echo "Tag cli-v$tag does not match package.json version $pkg" >&2
-            exit 1
+          LOCAL=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view petdex version 2>/dev/null || echo "0.0.0")
+          echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL" != "$PUBLISHED" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version changed: $PUBLISHED -> $LOCAL"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged ($LOCAL), nothing to publish"
           fi
-          echo "Publishing petdex@$pkg"
 
-      - name: Build CLI
-        run: bun run build
+      - name: Install dependencies
+        if: steps.version.outputs.changed == 'true'
+        run: bun install --frozen-lockfile
+        working-directory: .
 
       - name: Typecheck CLI
+        if: steps.version.outputs.changed == 'true'
         run: bun run typecheck
 
-      - name: Run CLI tests
+      - name: Run tests
+        if: steps.version.outputs.changed == 'true'
         run: bun test
+        working-directory: .
 
-      - name: Verify built binary
-        run: node dist/petdex.js --version
+      - name: Build CLI
+        if: steps.version.outputs.changed == 'true'
+        run: bun run build
+
+      - name: Verify the built binary runs
+        # The bundle is what users execute, so it gets exercised here
+        # rather than trusting that the source typechecked. `bubble` is
+        # the hot path every agent hook calls on every tool call, and a
+        # broken import there surfaces as an error inside someone's
+        # agent rather than here.
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          node dist/petdex.js --version
+          echo '{"tool_name":"Read","session_id":"ci"}' | node dist/petdex.js bubble pre claude-code
 
       - name: Publish to npm
-        run: npm publish --access public --tag "${{ github.event.inputs.dist-tag || 'latest' }}"
+        if: steps.version.outputs.changed == 'true'
+        run: npm publish --access public
+
+      - name: Tag and GitHub Release
+        if: steps.version.outputs.changed == 'true'
+        working-directory: .
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.local }}
+        run: |
+          set -euo pipefail
+          git tag "cli-v$VERSION"
+          git push origin "cli-v$VERSION"
+          gh release create "cli-v$VERSION" \
+            --title "petdex CLI v$VERSION" \
+            --generate-notes
