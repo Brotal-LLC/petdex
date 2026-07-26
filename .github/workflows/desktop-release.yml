@@ -96,21 +96,16 @@ jobs:
         working-directory: packages/petdex-desktop-native
         shell: bash
         run: |
-          "$NATIVE_CLI" package \
-            --target macos \
-            --binary zig-out/bin/petdex-desktop-native \
-            --output "Petdex.app" \
-            --signing adhoc
-          # Agent logos are compiled into the binary, so only the app
-          # icon still has to survive packaging.
-          test -f "Petdex.app/Contents/Resources/assets/icon.png"
-          ditto -c -k --keepParent "Petdex.app" "petdex-desktop-native-${{ matrix.target }}.zip"
-          # Upgrade bridge: the WebView desktop's updater and `petdex
-          # install desktop` both look for petdex-desktop-<target>, so
-          # the native binary answers to that name too. Without it the
-          # thousands of installs already out there would sit on 0.2.3
-          # forever, their updater asking for an asset nobody publishes.
-          cp zig-out/bin/petdex-desktop-native "petdex-desktop-${{ matrix.target }}"
+          # Adhoc signing produces a bundle Gatekeeper rejects on every
+          # Mac except the one that built it, which is how v0.3.0 first
+          # shipped: "Apple could not verify this app is free of
+          # malware". Signing and notarization are still done from a
+          # workstation with the Developer ID in its keychain, so this
+          # job refuses to build the macOS artifact rather than publish
+          # one nobody can open.
+          echo "macOS artifacts are signed and notarized from a workstation." >&2
+          echo "Run: scripts/sign-macos.sh, then upload the zip to the release." >&2
+          exit 1
           chmod +x "petdex-desktop-${{ matrix.target }}"
           ls -lh "petdex-desktop-native-${{ matrix.target }}.zip" "petdex-desktop-${{ matrix.target }}"
 
@@ -174,11 +169,12 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -type f -name "petdex-desktop-*" -exec cp {} release/ \;
-          test -f release/petdex-desktop-native-darwin-arm64.zip
+          # macOS is absent on purpose: its bundle is signed and
+          # notarized from a workstation (scripts/sign-macos.sh) and
+          # uploaded to the release afterwards.
           test -f release/petdex-desktop-native-linux-x64
           test -f release/petdex-desktop-native-win32-x64.exe
           # The compatibility names existing installs update through.
-          test -f release/petdex-desktop-darwin-arm64
           test -f release/petdex-desktop-linux-x64
           test -f release/petdex-desktop-win32-x64.exe
           ls -lh release/

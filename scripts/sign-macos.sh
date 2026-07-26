@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Build, sign, notarize and staple the macOS desktop app, then stage the
+# release zips beside it.
+#
+# This runs from a workstation, not CI: the Developer ID lives in a local
+# keychain. Skipping it produces an adhoc bundle that Gatekeeper rejects
+# everywhere except the machine that built it, which is exactly how
+# v0.3.0 first shipped.
+#
+# Needs ~/.config/petdex-apple/env with:
+#   APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER, SIGN_IDENTITY
+#
+# Usage:
+#   scripts/sign-macos.sh [output-dir]
+#   gh release upload desktop-vX.Y.Z <output-dir>/*.zip --clobber
+set -euo pipefail
+
+OUT="${1:-dist/macos}"
+PKG="packages/petdex-desktop-native"
+CREDS="$HOME/.config/petdex-apple/env"
+
+[ -f "$CREDS" ] || { echo "missing $CREDS" >&2; exit 1; }
+# shellcheck disable=SC1090
+set -a && . "$CREDS" && set +a
+
+# The key path in env may be a bare filename; resolve it next to the env.
+KEY="$APPLE_API_KEY"
+[ -f "$KEY" ] || KEY="$(dirname "$CREDS")/$(basename "$APPLE_API_KEY")"
+[ -f "$KEY" ] || { echo "missing notarization key: $APPLE_API_KEY" >&2; exit 1; }
+
+: "${NATIVE_CLI:?set NATIVE_CLI to the native CLI built from the pinned SDK}"
+: "${NATIVE_SDK_PATH:?set NATIVE_SDK_PATH to the pinned SDK checkout}"
+
+mkdir -p "$OUT"
+rm -rf "$OUT/Petdex.app" "$OUT"/*.zip
+
+echo "==> build"
+(cd "$PKG" && "$NATIVE_CLI" build)
+
+echo "==> package + sign"
+# The bundle must be named Petdex.app: the name is baked into the
+# signature, so renaming it afterwards breaks the seal.
+(cd "$PKG" && "$NATIVE_CLI" package \
+  --target macos \
+  --binary zig-out/bin/petdex-desktop-native \
+  --output "$OLDPWD/$OUT/Petdex.app" \
+  --signing identity \
+  --identity "$SIGN_IDENTITY")
+
+# Agent logos are compiled into the binary, so only the app icon still
+# has to survive packaging.
+test -f "$OUT/Petdex.app/Contents/Resources/assets/icon.png"
+
+echo "==> notarize"
+ditto -c -k --keepParent "$OUT/Petdex.app" "$OUT/notarize.zip"
+xcrun notarytool submit "$OUT/notarize.zip" \
+  --key "$KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+rm -f "$OUT/notarize.zip"
+
+echo "==> staple"
+# Stapling embeds the ticket so the app opens without a network round
+# trip on first launch.
+xcrun stapler staple "$OUT/Petdex.app"
+
+echo "==> verify"
+spctl -a -vvv "$OUT/Petdex.app"
+
+echo "==> stage release assets"
+# Both names carry the same notarized bundle. petdex-desktop-<target>
+# is the name existing installs update through; shipping a bare
+# executable under it does not work, since a lone Mach-O outside its
+# bundle fails Gatekeeper the same way an unsigned app does.
+ditto -c -k --keepParent "$OUT/Petdex.app" "$OUT/petdex-desktop-native-darwin-arm64.zip"
+cp "$OUT/petdex-desktop-native-darwin-arm64.zip" "$OUT/petdex-desktop-darwin-arm64.zip"
+
+ls -lh "$OUT"/*.zip
+echo
+echo "Upload with:"
+echo "  gh release upload desktop-vX.Y.Z $OUT/*.zip --clobber"
