@@ -315,7 +315,6 @@ jobs:
           APP_PID=$!
           sleep 10
           kill -0 "$APP_PID" || { echo "app died before the link"; cat /tmp/deeplink-run.log; exit 1; }
-          echo "$APP_PID" > /tmp/deeplink.pid
 
           # A slug the app does NOT have. `petdex://ci-pet` would match the
           # pet installed by hand above, and on_urls_opened answers an
@@ -336,6 +335,14 @@ jobs:
             fi
             sleep 2
           done
+
+          # Liveness is asserted HERE, inside the D-Bus session, while
+          # the process still exists. dbus-run-session reaps its children
+          # when the scenario returns, so the same check outside sees a
+          # dead PID for an app that handled the link perfectly and
+          # reports the opposite of what happened.
+          kill -0 "$APP_PID" || { echo "FAIL: the app died handling the deep link"; exit 1; }
+          echo "app still alive after the link: $APP_PID"
           SCENARIO
           chmod +x /tmp/deeplink.sh
 
@@ -367,8 +374,7 @@ jobs:
 
           # Surviving the link matters as much as acting on it: an install
           # that lands and then takes the app down with it is still broken.
-          APP_PID=$(cat /tmp/deeplink.pid)
-          kill -0 "$APP_PID" || { echo "FAIL: the app died handling the deep link"; exit 1; }
+
           kill "$APP_PID" || true
 
       - name: Run and exercise the hook server (Windows)
