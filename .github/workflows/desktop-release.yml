@@ -125,7 +125,28 @@ jobs:
           # table uniform across targets.
           cp zig-out/bin/petdex-desktop-native "petdex-desktop-${{ matrix.target }}"
           chmod +x "petdex-desktop-${{ matrix.target }}"
-          ls -lh "petdex-desktop-native-${{ matrix.target }}" "petdex-desktop-${{ matrix.target }}"
+
+          # A bare binary cannot answer petdex:// links. The scheme is
+          # resolved on Linux through a .desktop entry carrying
+          # MimeType=x-scheme-handler/petdex, which `native package`
+          # generates from app.zon alongside the icon set, and which the
+          # two copies above throw away. The tarball ships that tree so a
+          # real install has something to register; the loose binaries
+          # stay for existing installs that update by replacing a file.
+          "$NATIVE_CLI" package --target linux \
+            --binary zig-out/bin/petdex-desktop-native \
+            --output "$RUNNER_TEMP/pkg-linux"
+          DESKTOP="$RUNNER_TEMP/pkg-linux/share/applications/petdex-desktop-native.desktop"
+          grep -q "x-scheme-handler/petdex" "$DESKTOP" || {
+            echo "packaged .desktop does not claim the petdex scheme:"; cat "$DESKTOP"; exit 1; }
+          # --exclude because packaging copies the assets directory
+          # verbatim, and a .DS_Store authored on a maintainer's Mac has
+          # no business inside a Linux release.
+          tar -czf "petdex-desktop-native-${{ matrix.target }}.tar.gz" \
+            --exclude='.DS_Store' -C "$RUNNER_TEMP/pkg-linux" .
+
+          ls -lh "petdex-desktop-native-${{ matrix.target }}" "petdex-desktop-${{ matrix.target }}" \
+            "petdex-desktop-native-${{ matrix.target }}.tar.gz"
 
       - name: Stage the binary (Windows)
         if: matrix.target == 'win32-x64'
@@ -181,6 +202,9 @@ jobs:
           # The compatibility names existing installs update through.
           test -f release/petdex-desktop-linux-x64
           test -f release/petdex-desktop-win32-x64.exe
+          # The Linux tree, without which a fresh install has no .desktop
+          # entry and petdex:// links resolve to nothing on that platform.
+          test -f release/petdex-desktop-native-linux-x64.tar.gz
           ls -lh release/
 
       - name: Create GitHub Release
