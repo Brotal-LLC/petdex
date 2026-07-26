@@ -65,15 +65,39 @@ xcrun stapler staple "$OUT/Petdex.app"
 echo "==> verify"
 spctl -a -vvv "$OUT/Petdex.app"
 
+echo "==> dmg"
+# The DMG exists to make people drag the app to Applications before
+# opening it. Launching a .app straight out of Downloads triggers
+# macOS App Translocation: the app runs from a random read-only path
+# under /var/folders, so anything it writes that points at its own
+# binary (the agent hook symlink, for one) breaks on the next boot.
+DMG="$OUT/Petdex-arm64.dmg"
+STAGE="$OUT/dmg-stage"
+rm -rf "$STAGE" "$DMG"
+mkdir -p "$STAGE"
+cp -R "$OUT/Petdex.app" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname "Petdex" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+rm -rf "$STAGE"
+
+# The DMG is signed and notarized in its own right: Gatekeeper checks
+# the container the user actually double-clicks, not just what is
+# inside it.
+codesign --force --sign "$SIGN_IDENTITY" "$DMG"
+xcrun notarytool submit "$DMG" \
+  --key "$KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+xcrun stapler staple "$DMG"
+spctl -a -vvv -t open --context context:primary-signature "$DMG"
+
 echo "==> stage release assets"
-# Both names carry the same notarized bundle. petdex-desktop-<target>
+# Both zip names carry the same notarized bundle. petdex-desktop-<target>
 # is the name existing installs update through; shipping a bare
 # executable under it does not work, since a lone Mach-O outside its
 # bundle fails Gatekeeper the same way an unsigned app does.
 ditto -c -k --keepParent "$OUT/Petdex.app" "$OUT/petdex-desktop-native-darwin-arm64.zip"
 cp "$OUT/petdex-desktop-native-darwin-arm64.zip" "$OUT/petdex-desktop-darwin-arm64.zip"
 
-ls -lh "$OUT"/*.zip
+ls -lh "$OUT"/*.zip "$DMG"
 echo
 echo "Upload with:"
-echo "  gh release upload desktop-vX.Y.Z $OUT/*.zip --clobber"
+echo "  gh release upload desktop-vX.Y.Z $OUT/*.zip $DMG --clobber"
