@@ -22,6 +22,7 @@ export const CLIENT_MESSAGE_PATHS = [
   "onboarding",
   "openInCodex",
   "desktopAnnounce",
+  "downloadHero",
   "openInPetdex",
   "ownerCollections",
   "petActions",

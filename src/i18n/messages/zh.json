@@ -1993,5 +1993,17 @@
     "body": "你的宠物现在可以在 macOS、Windows 和 Linux 上漂浮，并对编程智能体的动作做出反应。",
     "cta": "免费下载",
     "__fixme": true
+  },
+  "downloadHero": {
+    "title": "Petdex Desktop",
+    "subtitle": "住在你桌面上的像素宠物，会对编程智能体的动作做出反应。",
+    "freeNote": "免费 · macOS、Windows、Linux",
+    "desktopOnly": "Petdex Desktop 需要在电脑上运行，手机不支持。",
+    "for": {
+      "macos": "下载 macOS 版",
+      "windows": "下载 Windows 版",
+      "linux": "下载 Linux 版"
+    },
+    "__fixme": true
   }
 }

@@ -1685,5 +1685,16 @@
     "imageAlt": "Petdex Desktop: una mascota pixel flotando junto a la ventana de ajustes, en macOS, Windows y Linux",
     "body": "Tu mascota ya flota en macOS, Windows y Linux, y reacciona a lo que hace tu agente de código.",
     "cta": "Descargar gratis"
+  },
+  "downloadHero": {
+    "title": "Petdex Desktop",
+    "subtitle": "Una mascota pixel que vive en tu escritorio y reacciona a lo que hace tu agente de código.",
+    "freeNote": "Gratis · macOS, Windows, Linux",
+    "desktopOnly": "Petdex Desktop corre en una computadora, no en un teléfono.",
+    "for": {
+      "macos": "Descargar para macOS",
+      "windows": "Descargar para Windows",
+      "linux": "Descargar para Linux"
+    }
   }
 }

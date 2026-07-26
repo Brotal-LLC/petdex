@@ -1,26 +1,12 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import {
-  ArrowRight,
-  CheckCircle,
-  Clock,
-  Command,
-  MonitorSmartphone,
-  Pointer,
-  ShieldCheck,
-  Sparkles,
-  Zap,
-} from "lucide-react";
-import { getLocale, getMessages, getTranslations } from "next-intl/server";
+import { ArrowRight, MonitorSmartphone, Pointer, Zap } from "lucide-react";
+import { getLocale, type getMessages, getTranslations } from "next-intl/server";
 
 import { buildLocaleAlternates } from "@/lib/locale-routing";
-import { getPet } from "@/lib/pets";
 
-import {
-  DownloadHeroActions,
-  DownloadSetupSteps,
-} from "@/components/download/download-activation-islands";
+import { DownloadHero } from "@/components/download/download-hero";
 import { StaticPetSprite } from "@/components/pets/static-pet-sprite";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
@@ -28,8 +14,8 @@ import { SiteHeader } from "@/components/site-header";
 import { hasLocale } from "@/i18n/config";
 
 const SITE_URL = "https://petdex.dev";
-const DEFAULT_PREVIEW_PET_SLUG = "boba";
-const DEFAULT_PREVIEW_PET = {
+const _DEFAULT_PREVIEW_PET_SLUG = "boba";
+const _DEFAULT_PREVIEW_PET = {
   spritesheetPath: "https://assets.petdex.dev/curated/boba/spritesheet.webp",
 };
 
@@ -81,14 +67,6 @@ export const revalidate = 3600;
 export default async function DownloadPage() {
   const t = await getTranslations("download");
   const locale = await getLocale();
-  const setupTemplates = getDownloadSetupTemplates(await getMessages());
-  const resolvedPreviewPet = await getPet(DEFAULT_PREVIEW_PET_SLUG);
-  const previewPet = {
-    displayName: t("preview.defaultPet"),
-    spritesheetPath:
-      resolvedPreviewPet?.spritesheetPath ??
-      DEFAULT_PREVIEW_PET.spritesheetPath,
-  };
 
   const features = [
     {
@@ -108,95 +86,11 @@ export default async function DownloadPage() {
     },
   ];
 
-  const platforms = [
-    {
-      name: t("platforms.macos.name"),
-      detail: t("platforms.macos.detail"),
-      available: true,
-    },
-    {
-      name: t("platforms.linux.name"),
-      detail: t("platforms.linux.detail"),
-      available: false,
-    },
-    {
-      name: t("platforms.windows.name"),
-      detail: t("platforms.windows.detail"),
-      available: false,
-    },
-  ];
-
-  const activationItems = [
-    {
-      icon: Command,
-      label: t("activation.items.hooks"),
-    },
-    {
-      icon: ShieldCheck,
-      label: t("activation.items.desktop"),
-    },
-    {
-      icon: Sparkles,
-      label: t("activation.items.pet"),
-    },
-  ];
-
   return (
     <main className="relative min-h-dvh bg-background text-foreground">
       <SiteHeader />
 
-      <section className="mx-auto w-full max-w-[1440px] px-5 pt-10 pb-12 md:px-8 md:pt-16">
-        <div className="grid min-w-0 items-center gap-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(420px,1fr)]">
-          <div className="min-w-0 max-w-2xl">
-            <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">
-              {t("eyebrow")}
-            </p>
-            <h1 className="mt-3 text-pretty text-[40px] leading-[0.98] font-semibold tracking-tight sm:text-[52px] md:text-[72px]">
-              {t("title")}
-            </h1>
-            <p className="mt-5 max-w-xl text-pretty text-base leading-7 text-muted-1 md:text-lg">
-              {t("subtitle")}
-            </p>
-
-            <DownloadHeroActions
-              labels={{
-                primaryLabel: t("hero.primaryTitle"),
-                cliSubtext: t("hero.cliSubtext"),
-                manualLabel: t("hero.manualLabel"),
-                manualSubtext: t("hero.manualSubtext"),
-                desktopOnlyLabel: t("hero.desktopOnly"),
-                pendingBefore: t("pendingPet.messageBefore"),
-                pendingAfter: t("pendingPet.messageAfter"),
-              }}
-            />
-
-            <div className="mt-5 grid gap-2 sm:grid-cols-3">
-              {activationItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div
-                    key={item.label}
-                    className="flex min-w-0 items-center gap-2 rounded-lg border border-border-base bg-surface px-3 py-2 text-sm text-muted-1"
-                  >
-                    <Icon className="size-4 shrink-0 text-brand" />
-                    <span className="truncate">{item.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <DesktopActivationPreview
-            pendingLabel={null}
-            pendingPet={previewPet}
-            title={t("preview.title")}
-            status={t("preview.status")}
-            terminalLabel={t("preview.terminalLabel")}
-            agentLabel={t("preview.agentLabel")}
-            petLabel={t("preview.defaultPet")}
-          />
-        </div>
-      </section>
+      <DownloadHero />
 
       <section
         id="what-it-does"
@@ -235,72 +129,6 @@ export default async function DownloadPage() {
           })}
         </div>
       </section>
-
-      <section
-        id="how-it-works"
-        className="mx-auto w-full max-w-[1440px] px-5 py-16 md:px-8"
-      >
-        <div className="mx-auto max-w-2xl">
-          <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">
-            {t("setup.eyebrow")}
-          </p>
-          <h2 className="mt-3 text-3xl font-semibold tracking-tight md:text-4xl">
-            {t("setup.title")}
-          </h2>
-
-          <DownloadSetupSteps
-            labels={{
-              step1Title: t("setup.step1.title"),
-              step1Hint: t("setup.step1.hint"),
-              installPetTitle: setupTemplates.installPetTitle,
-              installPetHint: t("setup.installPet.hint"),
-              installPetsTitle: setupTemplates.installPetsTitle,
-              installPetsHint: t("setup.installPets.hint"),
-              stayUpdatedTitle: t("setup.stayUpdated.title"),
-              stayUpdatedHint: t("setup.stayUpdated.hint"),
-            }}
-          />
-        </div>
-      </section>
-
-      <section className="mx-auto w-full max-w-[1440px] px-5 py-16 md:px-8">
-        <div className="mx-auto max-w-2xl">
-          <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">
-            {t("platforms.eyebrow")}
-          </p>
-          <h2 className="mt-3 text-3xl font-semibold tracking-tight md:text-4xl">
-            {t("platforms.title")}
-          </h2>
-
-          <div className="mt-8 flex flex-col divide-y divide-border-base overflow-hidden rounded-2xl border border-border-base bg-surface">
-            {platforms.map((platform) => (
-              <div
-                key={platform.name}
-                className="flex items-center justify-between gap-4 px-5 py-4"
-              >
-                <div>
-                  <p className="font-medium text-foreground">{platform.name}</p>
-                  <p className="text-sm text-muted-3">{platform.detail}</p>
-                </div>
-                {platform.available ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-600 ring-1 ring-emerald-500/20 dark:text-emerald-400">
-                    <CheckCircle className="size-3.5" />
-                    {t("platforms.available")}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-muted px-3 py-1 text-xs font-medium text-muted-3 ring-1 ring-border-base">
-                    <Clock className="size-3.5" />
-                    {t("platforms.comingSoon")}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <p className="mt-4 text-sm text-muted-3">{t("platforms.footer")}</p>
-        </div>
-      </section>
-
       <section className="mx-auto w-full max-w-[1440px] px-5 py-10 md:px-8">
         <div className="mx-auto max-w-2xl">
           <Link
@@ -318,7 +146,7 @@ export default async function DownloadPage() {
   );
 }
 
-function getDownloadSetupTemplates(
+function _getDownloadSetupTemplates(
   messages: Awaited<ReturnType<typeof getMessages>>,
 ) {
   return {
@@ -346,7 +174,7 @@ function getMessageString(messages: unknown, path: string[], fallback: string) {
   return typeof current === "string" ? current : fallback;
 }
 
-function DesktopActivationPreview({
+function _DesktopActivationPreview({
   pendingLabel,
   pendingPet,
   title,

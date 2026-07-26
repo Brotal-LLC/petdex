@@ -1685,5 +1685,16 @@
     "imageAlt": "Petdex Desktop: a pixel pet floating beside the settings window, on macOS, Windows and Linux",
     "body": "Your pet now floats on macOS, Windows and Linux, and reacts to what your coding agent is doing.",
     "cta": "Download free"
+  },
+  "downloadHero": {
+    "title": "Petdex Desktop",
+    "subtitle": "A pixel pet that lives on your desktop and reacts to what your coding agent is doing.",
+    "freeNote": "Free · macOS, Windows, Linux",
+    "desktopOnly": "Petdex Desktop runs on a computer, not a phone.",
+    "for": {
+      "macos": "Download for macOS",
+      "windows": "Download for Windows",
+      "linux": "Download for Linux"
+    }
   }
 }
