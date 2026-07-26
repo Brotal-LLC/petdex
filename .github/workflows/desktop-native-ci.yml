@@ -352,6 +352,11 @@ jobs:
           cat /tmp/deeplink-run.log || true
           echo "=== ~/.petdex/pets ==="
           ls -lR ~/.petdex/pets || true
+          # Both roots, because the mirror into .codex is asserted below
+          # and a bare "it is missing" says nothing about whether the
+          # directory was created empty or never touched at all.
+          echo "=== ~/.codex/pets ==="
+          ls -lR ~/.codex/pets || true
 
           import -window root /tmp/linux-screen-deeplink.png || true
 
@@ -372,10 +377,12 @@ jobs:
           test -s "$HOME/.codex/pets/paperclip/spritesheet.webp" || {
             echo "FAIL: the pet was never mirrored into the .codex root"; exit 1; }
 
-          # Surviving the link matters as much as acting on it: an install
-          # that lands and then takes the app down with it is still broken.
-
-          kill "$APP_PID" || true
+          # No kill and no liveness check here. Surviving the link matters
+          # as much as acting on it, but that is asserted inside the
+          # scenario, where the process still exists: dbus-run-session
+          # reaps the app along with its shell when it returns. Naming
+          # APP_PID out here is an unbound variable, and under set -u that
+          # failed the step after every assertion had already passed.
 
       - name: Run and exercise the hook server (Windows)
         if: matrix.platform == 'windows'
