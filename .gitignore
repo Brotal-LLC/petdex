@@ -81,6 +81,9 @@ HANDOFF.md
 *.cer
 *.certSigningRequest
 
-# Petdex Desktop release artifacts (uploaded to GH releases, not commited)
-packages/petdex-desktop/Petdex-*.dmg
-packages/petdex-desktop/petdex-desktop-darwin-*
+# Petdex Desktop release artifacts (uploaded to GH releases, not commited).
+# scripts/sign-macos.sh stages a signed bundle, a DMG and both zips here,
+# which is ~16MB that a `git add -A` would otherwise sweep in.
+/dist/
+packages/petdex-desktop-native/zig-out/
+packages/petdex-desktop-native/.zig-cache/
