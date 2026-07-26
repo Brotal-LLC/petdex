@@ -16,6 +16,7 @@ import { getRandomPet } from "@/lib/random-pet-pool";
 import { toSurprisePet } from "@/lib/surprise-pets";
 import { cn } from "@/lib/utils";
 
+import { DesktopReleaseDialog } from "@/components/announce/desktop-release-dialog";
 import { CollectionActionMenu } from "@/components/collections/collection-action-menu";
 import { CollectionCover } from "@/components/collections/collection-cover";
 import { DiscordLink } from "@/components/community/discord-link";
@@ -254,6 +255,8 @@ export default async function Home({
       </section>
 
       <SiteFooter />
+
+      <DesktopReleaseDialog />
     </main>
   );
 }

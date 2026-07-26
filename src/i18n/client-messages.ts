@@ -21,6 +21,7 @@ export const CLIENT_MESSAGE_PATHS = [
   "myPets.edit",
   "onboarding",
   "openInCodex",
+  "desktopAnnounce",
   "openInPetdex",
   "ownerCollections",
   "petActions",

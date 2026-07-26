@@ -1986,5 +1986,12 @@
       "path": "<路径>",
       "desktopAction": "start | stop | status"
     }
+  },
+  "desktopAnnounce": {
+    "title": "Petdex Desktop 0.3.0",
+    "imageAlt": "Petdex Desktop：像素宠物漂浮在设置窗口旁，支持 macOS、Windows 和 Linux",
+    "body": "你的宠物现在可以在 macOS、Windows 和 Linux 上漂浮，并对编程智能体的动作做出反应。",
+    "cta": "免费下载",
+    "__fixme": true
   }
 }

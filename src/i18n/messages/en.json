@@ -1679,5 +1679,11 @@
       "path": "<path>",
       "desktopAction": "start | stop | status"
     }
+  },
+  "desktopAnnounce": {
+    "title": "Petdex Desktop 0.3.0",
+    "imageAlt": "Petdex Desktop: a pixel pet floating beside the settings window, on macOS, Windows and Linux",
+    "body": "Your pet now floats on macOS, Windows and Linux, and reacts to what your coding agent is doing.",
+    "cta": "Download free"
   }
 }
