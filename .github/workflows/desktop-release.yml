@@ -121,6 +121,10 @@ jobs:
           NATIVE_SDK_REMOTE: "https://github.com/Railly/native.git"
           NATIVE_SDK_BRANCH: "feat/floating-window-0.5.3"
           NATIVE_SDK_REF: "b749ae5eb6fd759cc49871d2d00ae33d9fd05542"
+        # Explicit bash: this job now runs on a Windows runner too, where
+        # the default shell is PowerShell and `set -euo pipefail` fails
+        # as an unknown parameter before git is ever reached.
+        shell: bash
         run: |
           set -euo pipefail
           git clone --depth 1 --branch "$NATIVE_SDK_BRANCH" "$NATIVE_SDK_REMOTE" "$GITHUB_WORKSPACE/native-sdk"
