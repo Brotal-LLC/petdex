@@ -56,7 +56,7 @@ jobs:
         env:
           NATIVE_SDK_REMOTE: "https://github.com/Railly/native.git"
           NATIVE_SDK_BRANCH: "feat/floating-window-0.5.3"
-          NATIVE_SDK_REF: "a3956694151b4cc0ac169bdec853b7d3534395a3"
+          NATIVE_SDK_REF: "65d4885cb5f76a5d1f33cace56b93a898f7b2cb3"
         # Explicit bash: this job now runs on a Windows runner too, where
         # the default shell is PowerShell and `set -euo pipefail` fails
         # as an unknown parameter before git is ever reached.
@@ -136,7 +136,8 @@ jobs:
           "$NATIVE_CLI" package --target linux \
             --binary zig-out/bin/petdex-desktop-native \
             --output "$RUNNER_TEMP/pkg-linux"
-          DESKTOP="$RUNNER_TEMP/pkg-linux/share/applications/petdex-desktop-native.desktop"
+          DESKTOP=$(ls "$RUNNER_TEMP"/pkg-linux/share/applications/*.desktop 2>/dev/null | head -1)
+          test -n "$DESKTOP" || { echo "package wrote no .desktop entry"; exit 1; }
           grep -q "x-scheme-handler/petdex" "$DESKTOP" || {
             echo "packaged .desktop does not claim the petdex scheme:"; cat "$DESKTOP"; exit 1; }
           # --exclude because packaging copies the assets directory

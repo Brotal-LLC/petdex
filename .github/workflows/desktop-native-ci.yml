@@ -105,7 +105,7 @@ jobs:
         env:
           NATIVE_SDK_REMOTE: "https://github.com/Railly/native.git"
           NATIVE_SDK_BRANCH: "feat/floating-window-0.5.3"
-          NATIVE_SDK_REF: "a3956694151b4cc0ac169bdec853b7d3534395a3"
+          NATIVE_SDK_REF: "65d4885cb5f76a5d1f33cace56b93a898f7b2cb3"
         shell: bash
         run: |
           set -euo pipefail
@@ -262,8 +262,12 @@ jobs:
           "$NATIVE_CLI" package --target linux \
             --binary zig-out/bin/petdex-desktop-native \
             --output "$RUNNER_TEMP/pkg-linux"
-          DESKTOP_SRC="$RUNNER_TEMP/pkg-linux/share/applications/petdex-desktop-native.desktop"
-          test -f "$DESKTOP_SRC" || { echo "package wrote no .desktop entry"; exit 1; }
+          # Globbed, not named: the entry's basename is the app id
+          # (dev.petdex.desktop-native), which GApplication also owns on
+          # the session bus. Hardcoding either spelling here would go
+          # stale the next time app.zon's id or name moves.
+          DESKTOP_SRC=$(ls "$RUNNER_TEMP"/pkg-linux/share/applications/*.desktop 2>/dev/null | head -1)
+          test -n "$DESKTOP_SRC" || { echo "package wrote no .desktop entry"; exit 1; }
           grep -q "x-scheme-handler/petdex" "$DESKTOP_SRC" || {
             echo "the .desktop entry does not claim the petdex scheme:"; cat "$DESKTOP_SRC"; exit 1; }
 
