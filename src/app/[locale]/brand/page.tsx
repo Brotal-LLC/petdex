@@ -94,7 +94,7 @@ export default async function BrandPage() {
     <main className="min-h-dvh bg-background text-foreground">
       <SiteHeader />
 
-      <section className="petdex-cloud relative -mt-[84px] overflow-clip pt-[84px]">
+      <section className="petdex-hero relative -mt-14 overflow-clip pt-14">
         <div className="mx-auto grid w-full max-w-[1440px] gap-10 px-5 pt-14 pb-16 md:grid-cols-[1fr_0.9fr] md:px-8 md:pt-24 md:pb-24">
           <div className="flex flex-col justify-center">
             <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">

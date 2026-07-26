@@ -1,11 +1,10 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Check,
-  X as CloseIcon,
   Copy,
   ExternalLink,
   Layers,
@@ -23,6 +22,15 @@ import {
 } from "@/lib/petdex-desktop-link";
 
 import { CodexLogo } from "@/components/download/codex-logo";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const SITE_URL = "https://petdex.dev";
 // Cap on the install command length. Beyond this we truncate with a
@@ -46,33 +54,12 @@ type Copied = "install" | "link" | null;
 export function CollectionActionMenu({ collection }: Props) {
   const t = useTranslations("collectionActionMenu");
   const locale = useLocale();
-  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<Copied>(null);
   const [isMac, setIsMac] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setIsMac(isMacDesktop());
   }, []);
-
-  // Close on outside click + Escape so the menu does not strand itself
-  // when the user moves on. Same pattern as PetActionMenu.
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
 
   // Auto-clear the copied affordance so a user reopening the menu later
   // does not see a stale checkmark.
@@ -110,205 +97,139 @@ export function CollectionActionMenu({ collection }: Props) {
     const text = t("shareXText", { title: collection.title });
     const url = `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(collectionUrl)}`;
     window.open(url, "_blank", "noopener,noreferrer");
-    setOpen(false);
   };
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: stopPropagation wrapper, the trigger button is the interactive role
     <div
-      ref={ref}
-      style={open ? { zIndex: 60 } : undefined}
-      className="relative"
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") e.stopPropagation();
       }}
     >
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={t("moreActions", { title: collection.title })}
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        className="inline-flex size-8 items-center justify-center rounded-full border border-border-base bg-surface/90 text-muted-2 transition hover:border-border-strong hover:text-foreground"
-      >
-        <MoreHorizontal className="size-4" />
-      </button>
-
-      {open ? (
-        <div
-          role="menu"
-          className="absolute top-full right-0 z-[60] mt-2 w-72 overflow-hidden rounded-2xl border border-border-base bg-surface shadow-xl shadow-blue-950/15"
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label={t("moreActions", { title: collection.title })}
+          className="inline-flex size-8 items-center justify-center rounded-full border border-border-base bg-surface/70 text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground data-popup-open:bg-surface-muted data-popup-open:text-foreground"
         >
-          <div className="flex items-center justify-between border-b border-black/[0.06] px-3 py-2 dark:border-white/[0.06]">
-            <span className="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-[0.18em] text-muted-3 uppercase">
+          <MoreHorizontal className="size-4" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={8} className="w-72 p-0">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="flex items-center gap-1.5 border-b border-foreground/[0.06] px-3 py-2 font-mono text-[10px] tracking-[0.18em] text-muted-3 uppercase">
               <Layers className="size-3" />
               {collection.title}
-            </span>
-            <button
-              type="button"
-              aria-label={t("closeMenu")}
+            </DropdownMenuLabel>
+          </DropdownMenuGroup>
+          {slugs.length > 0 && isMac ? (
+            <DropdownMenuItem
+              render={
+                // biome-ignore lint/a11y/useAnchorContent: content injected by the render prop
+                <a href={downloadHref} />
+              }
               onClick={(e) => {
-                e.preventDefault();
-                setOpen(false);
+                const me = e as unknown as React.MouseEvent;
+                if (me.metaKey || me.ctrlKey || me.shiftKey) return;
+                me.preventDefault?.();
+                openPetdexDeepLink(petdexInstallUrl, downloadHref);
               }}
-              className="grid size-6 place-items-center rounded-full text-muted-4 transition hover:bg-surface-muted hover:text-foreground"
             >
-              <CloseIcon className="size-3.5" />
-            </button>
-          </div>
-
-          <ul className="py-1">
-            {slugs.length > 0 && isMac ? (
-              <li>
-                <a
-                  href={downloadHref}
-                  onClick={(e) => {
-                    if (
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.button !== 0
-                    ) {
-                      return;
-                    }
-                    e.preventDefault();
-                    setOpen(false);
-                    openPetdexDeepLink(petdexInstallUrl, downloadHref);
-                  }}
-                  className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2 transition hover:bg-surface-muted hover:text-foreground"
-                >
-                  <Image
-                    src="/brand/petdex-desktop-icon.png"
-                    alt=""
-                    width={16}
-                    height={16}
-                    className="size-4 object-contain"
-                  />
-                  <span className="flex flex-col">
-                    <span>{t("openInPetdex")}</span>
-                    <span className="font-mono text-[10px] tracking-tight text-muted-4">
-                      {openInPetdexDesc}
-                    </span>
-                  </span>
-                </a>
-              </li>
-            ) : null}
-            {slugs.length > 0 ? (
-              <li>
+              <Image
+                src="/brand/petdex-desktop-icon.png"
+                alt=""
+                width={16}
+                height={16}
+                className="size-4 object-contain"
+              />
+              <span className="flex flex-col">
+                <span>{t("openInPetdex")}</span>
+                <span className="font-mono text-[10px] tracking-tight text-muted-4">
+                  {openInPetdexDesc}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          ) : null}
+          {slugs.length > 0 ? (
+            <DropdownMenuItem
+              render={
+                // biome-ignore lint/a11y/useAnchorContent: content injected by the render prop
                 <a
                   href={`codex://new?prompt=${encodeURIComponent(`Install this Petdex collection by running: ${installCmd}`)}`}
-                  onClick={() => setOpen(false)}
-                  className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2 transition hover:bg-surface-muted hover:text-foreground"
-                >
-                  <CodexLogo className="size-4" />
-                  <span className="flex flex-col">
-                    <span>{t("openInCodex")}</span>
-                    <span className="font-mono text-[10px] tracking-tight text-muted-4">
-                      {t("openInCodexDesc")}
-                    </span>
-                  </span>
-                </a>
-              </li>
-            ) : null}
-            {slugs.length > 0 ? (
-              <Item
-                icon={
-                  copied === "install" ? (
-                    <Check className="size-4 text-emerald-600" />
-                  ) : (
-                    <Terminal className="size-4" />
-                  )
-                }
-                label={
-                  copied === "install"
-                    ? t("copiedInstall")
-                    : t("copyInstallAll")
-                }
-                hint={installHint}
-                showCopyIcon={copied !== "install"}
-                onClick={() => copyText(installCmd, "install")}
-              />
-            ) : null}
-            <Item
-              icon={
-                copied === "link" ? (
-                  <Check className="size-4 text-emerald-600" />
-                ) : (
-                  <Link2 className="size-4" />
-                )
+                />
               }
-              label={
-                copied === "link" ? t("copiedLink") : t("copyCollectionLink")
-              }
-              hint={collectionUrl.replace(/^https?:\/\//, "")}
-              showCopyIcon={copied !== "link"}
-              onClick={() => copyText(collectionUrl, "link")}
-            />
-            <Item
-              icon={<XIcon className="size-4" />}
-              label={t("shareToX")}
-              onClick={onShareX}
-            />
-            <li>
-              <a
-                href={`/collections/${collection.slug}`}
-                onClick={() => setOpen(false)}
-                className="flex items-center gap-2.5 border-t border-black/[0.06] px-3 py-2.5 text-sm text-muted-2 transition hover:bg-surface-muted hover:text-foreground dark:border-white/[0.06]"
-              >
-                <ExternalLink className="size-4" />
-                <span className="flex-1">{t("viewCollection")}</span>
-              </a>
-            </li>
-          </ul>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Item({
-  icon,
-  label,
-  hint,
-  showCopyIcon,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  hint?: string;
-  showCopyIcon?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={(e) => {
-          e.preventDefault();
-          onClick();
-        }}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-muted-2 transition hover:bg-surface-muted hover:text-foreground"
-      >
-        {icon}
-        <span className="flex flex-col">
-          <span>{label}</span>
-          {hint ? (
-            <span className="font-mono text-[10px] tracking-tight text-muted-4">
-              {hint}
-            </span>
+            >
+              <CodexLogo className="size-4" />
+              <span className="flex flex-col">
+                <span>{t("openInCodex")}</span>
+                <span className="font-mono text-[10px] tracking-tight text-muted-4">
+                  {t("openInCodexDesc")}
+                </span>
+              </span>
+            </DropdownMenuItem>
           ) : null}
-        </span>
-        {showCopyIcon ? (
-          <Copy className="ml-auto size-3.5 text-stone-300 dark:text-stone-600" />
-        ) : null}
-      </button>
-    </li>
+          {slugs.length > 0 ? (
+            <DropdownMenuItem
+              closeOnClick={false}
+              onClick={() => void copyText(installCmd, "install")}
+            >
+              {copied === "install" ? (
+                <Check className="size-4 text-emerald-600" />
+              ) : (
+                <Terminal className="size-4" />
+              )}
+              <span className="flex flex-col">
+                <span>
+                  {copied === "install"
+                    ? t("copiedInstall")
+                    : t("copyInstallAll")}
+                </span>
+                <span className="font-mono text-[10px] tracking-tight text-muted-4">
+                  {installHint}
+                </span>
+              </span>
+              {copied !== "install" ? (
+                <Copy className="ml-auto size-3.5 text-muted-4" />
+              ) : null}
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem
+            closeOnClick={false}
+            onClick={() => void copyText(collectionUrl, "link")}
+          >
+            {copied === "link" ? (
+              <Check className="size-4 text-emerald-600" />
+            ) : (
+              <Link2 className="size-4" />
+            )}
+            <span className="flex flex-col">
+              <span>
+                {copied === "link" ? t("copiedLink") : t("copyCollectionLink")}
+              </span>
+              <span className="font-mono text-[10px] tracking-tight text-muted-4">
+                {collectionUrl.replace(/^https?:\/\//, "")}
+              </span>
+            </span>
+            {copied !== "link" ? (
+              <Copy className="ml-auto size-3.5 text-muted-4" />
+            ) : null}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onShareX}>
+            <XIcon className="size-4" />
+            {t("shareToX")}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="my-0" />
+          <DropdownMenuItem
+            render={
+              // biome-ignore lint/a11y/useAnchorContent: content injected by the render prop
+              <a href={`/collections/${collection.slug}`} />
+            }
+          >
+            <ExternalLink className="size-4" />
+            <span className="flex-1">{t("viewCollection")}</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 

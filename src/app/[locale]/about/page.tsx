@@ -96,7 +96,7 @@ export default async function AboutPage({
     <main className="min-h-dvh bg-background text-foreground">
       <JsonLd data={jsonLd} />
       <SiteHeader />
-      <section className="petdex-cloud relative -mt-[84px] overflow-clip pt-[84px]">
+      <section className="petdex-hero relative -mt-14 overflow-clip pt-14">
         <div className="relative mx-auto flex w-full max-w-[1440px] flex-col px-5 pb-10 md:px-8">
           <div className="mt-12 flex flex-col items-center text-center md:mt-16">
             <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">

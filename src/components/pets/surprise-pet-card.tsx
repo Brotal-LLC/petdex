@@ -8,9 +8,10 @@ import { useLocale, useTranslations } from "next-intl";
 
 import { withLocale } from "@/lib/locale-routing";
 import type { SurprisePet } from "@/lib/surprise-pets";
-import { safeGetItem, safeSetItem } from "@/lib/utils";
+import { cn, safeGetItem, safeSetItem } from "@/lib/utils";
 
 import { PetSprite } from "@/components/pets/pet-sprite";
+import { buttonVariants } from "@/components/ui/button";
 
 import { hasLocale, type Locale } from "@/i18n/config";
 
@@ -70,7 +71,7 @@ export function SurprisePetCard({ initialPet = null }: SurprisePetCardProps) {
   const installHref = withLocale(pet.installHref, currentLocale);
 
   return (
-    <aside className="fixed bottom-4 left-4 z-40 w-[min(calc(100vw-2rem),360px)] rounded-3xl border border-border-base bg-surface/95 p-4 text-foreground shadow-[0_24px_70px_-32px_rgba(16,24,40,0.55)] backdrop-blur md:bottom-6 md:left-6">
+    <aside className="fixed bottom-4 left-4 z-40 w-[min(calc(100vw-2rem),360px)] rounded-3xl border border-border-base bg-surface/95 p-4 text-foreground shadow-[0_24px_70px_-32px_rgba(16,24,40,0.55)] backdrop-blur duration-300 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-3 md:bottom-6 md:left-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="font-mono text-[10px] tracking-[0.22em] text-brand uppercase">
@@ -116,14 +117,23 @@ export function SurprisePetCard({ initialPet = null }: SurprisePetCardProps) {
       <div className="mt-4 grid grid-cols-3 gap-2">
         <Link
           href={petHref}
-          className="inline-flex h-10 items-center justify-center gap-1.5 rounded-full bg-inverse px-3 text-xs font-medium text-on-inverse transition hover:bg-inverse-hover"
+          className={cn(
+            buttonVariants({ variant: "petdex-inverse", size: "petdex-pill" }),
+            "gap-1.5 px-3",
+          )}
         >
           <ExternalLink className="size-3.5" />
           {t("view")}
         </Link>
         <Link
           href={installHref}
-          className="inline-flex h-10 items-center justify-center gap-1.5 rounded-full border border-border-base bg-surface px-3 text-xs font-medium text-foreground transition hover:bg-surface-muted"
+          className={cn(
+            buttonVariants({
+              variant: "petdex-secondary",
+              size: "petdex-pill",
+            }),
+            "gap-1.5 px-3",
+          )}
         >
           <PackageOpen className="size-3.5" />
           {t("install")}
@@ -132,7 +142,13 @@ export function SurprisePetCard({ initialPet = null }: SurprisePetCardProps) {
           type="button"
           onClick={() => void loadPet()}
           disabled={loading}
-          className="inline-flex h-10 items-center justify-center gap-1.5 rounded-full border border-border-base bg-surface px-3 text-xs font-medium text-foreground transition hover:bg-surface-muted disabled:cursor-wait disabled:opacity-60"
+          className={cn(
+            buttonVariants({
+              variant: "petdex-secondary",
+              size: "petdex-pill",
+            }),
+            "gap-1.5 px-3 disabled:cursor-wait disabled:opacity-60",
+          )}
         >
           <Dice5 className="size-3.5" />
           {t("shuffle")}

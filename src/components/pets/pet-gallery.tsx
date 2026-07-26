@@ -10,11 +10,19 @@ import {
   useState,
 } from "react";
 
-import { Check, Loader2, Plus, Search, Sparkles, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Loader2,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 
 import { COLOR_FAMILIES, type ColorFamily } from "@/lib/color-families";
-import { formatBatchLabel, getBatchKey } from "@/lib/dex-batch";
 import { formatLocalizedNumber } from "@/lib/format-number";
 import { petPreviewUrlForSource } from "@/lib/pet-preview";
 import type { SearchPet } from "@/lib/pet-search";
@@ -124,6 +132,7 @@ export function PetGallery({
   const [activeBatches, setActiveBatches] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<SortKey>("installed");
   const [sortTouched, setSortTouched] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const caughtSet = new Set(caughtSlugs ?? []);
 
   const [pets, setPets] = useState<SearchPet[]>(initial.pets);
@@ -310,9 +319,9 @@ export function PetGallery({
  to the right, filter chips wrap below. The whole surface gets the
  same subtle elevation as the announcement modal so it reads as a
  single primary action region. */}
-      <div className="rounded-3xl border border-black/[0.06] bg-surface p-3 shadow-[0_8px_24px_-12px_rgba(56,71,245,0.18)] md:p-4 dark:border-white/[0.06]">
+      <div className="sticky top-16 z-30 rounded-2xl border border-border-base bg-background/85 p-3 backdrop-blur-md md:p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <InputGroup className="h-11 flex-1 rounded-full bg-background/40">
+          <InputGroup className="h-10 flex-1 rounded-full border-border-base bg-background/40">
             <InputGroupAddon align="inline-start">
               <Search className="size-4 text-muted-3" />
             </InputGroupAddon>
@@ -321,7 +330,7 @@ export function PetGallery({
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t("searchPlaceholder")}
               aria-label={t("searchAria")}
-              className="text-sm placeholder:text-muted-3"
+              className="text-[13px] placeholder:text-muted-3"
             />
             {query.length > 0 ? (
               <InputGroupAddon align="inline-end">
@@ -337,6 +346,23 @@ export function PetGallery({
             ) : null}
           </InputGroup>
 
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            className="hidden h-10 shrink-0 items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-4 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground aria-expanded:border-brand/40 aria-expanded:bg-brand/15 aria-expanded:text-brand md:inline-flex"
+          >
+            <SlidersHorizontal className="size-3.5" />
+            Filters
+            {activeFilterCount > 0 ? (
+              <span className="grid size-4.5 place-items-center rounded-full bg-brand font-mono text-[9px] font-semibold text-white">
+                {activeFilterCount}
+              </span>
+            ) : null}
+            <ChevronDown
+              className={`size-3.5 transition-transform duration-200 ${filtersOpen ? "rotate-180" : ""}`}
+            />
+          </button>
           <Select
             value={sort}
             onValueChange={(next) => {
@@ -346,12 +372,16 @@ export function PetGallery({
           >
             <SelectTrigger
               aria-label={t("sortAria")}
-              className="w-full shrink-0 sm:w-auto sm:min-w-[180px]"
+              className="h-10 w-full shrink-0 rounded-full border-border-base bg-surface/70 text-[13px] backdrop-blur hover:bg-surface-muted sm:w-auto sm:min-w-[180px]"
             >
               <span className="text-muted-3">Sort:</span>
               <span className="text-foreground">{SORT_LABELS[sort]}</span>
             </SelectTrigger>
-            <SelectContent align="end">
+            <SelectContent
+              alignItemWithTrigger={false}
+              sideOffset={6}
+              align="end"
+            >
               {(Object.entries(SORT_LABELS) as [SortKey, string][]).map(
                 ([key, label]) => (
                   <SelectItem key={key} value={key}>
@@ -463,7 +493,48 @@ export function PetGallery({
         {/* Desktop: filters grouped by category with Type · Vibe · Color
  · Era separators. Eyebrow labels mark each cluster for scan-
  ability without losing the wrap-row density. */}
-        <div className="mt-3 hidden flex-col gap-3 border-t border-black/[0.05] pt-3 md:flex dark:border-white/[0.05]">
+        {!filtersOpen && activeFilterCount > 0 ? (
+          <div className="mt-3 hidden flex-wrap items-center gap-1.5 md:flex">
+            <FilterChips
+              options={[...activeKinds]}
+              counts={facets.kinds}
+              active={activeKinds}
+              onToggle={(v) => toggleKind(v as PetKind)}
+              tone="kind"
+            />
+            <FilterChips
+              options={[...activeVibes]}
+              counts={facets.vibes}
+              active={activeVibes}
+              onToggle={(v) => toggleVibe(v as PetVibe)}
+              tone="vibe"
+            />
+            <FilterChips
+              options={[...activeColors]}
+              counts={facets.colors}
+              active={activeColors}
+              onToggle={(v) => toggleColor(v as ColorFamily)}
+              tone="color"
+              dotColors={FAMILY_DOT}
+            />
+            <FilterChips
+              options={[...activeBatches]}
+              counts={Object.fromEntries(
+                facets.batches.map((batch) => [batch.key, batch.count]),
+              )}
+              labels={Object.fromEntries(
+                facets.batches.map((batch) => [batch.key, batch.label]),
+              )}
+              active={activeBatches}
+              onToggle={toggleBatch}
+              tone="batch"
+            />
+          </div>
+        ) : null}
+        <div
+          key={filtersOpen ? "open" : "closed"}
+          className={`mt-3 flex-col gap-3 border-t border-black/[0.05] pt-3 duration-200 animate-in fade-in-0 slide-in-from-top-1 dark:border-white/[0.05] ${filtersOpen ? "hidden md:flex" : "hidden"}`}
+        >
           <FilterRow label="Type">
             <FilterChips
               options={PET_KINDS}
@@ -471,6 +542,7 @@ export function PetGallery({
               active={activeKinds}
               onToggle={(v) => toggleKind(v as PetKind)}
               tone="kind"
+              max={8}
             />
             <span aria-hidden className="px-1 text-muted-4">
               ·
@@ -481,6 +553,7 @@ export function PetGallery({
               active={activeVibes}
               onToggle={(v) => toggleVibe(v as PetVibe)}
               tone="vibe"
+              max={8}
             />
           </FilterRow>
           <FilterRow label="Color">
@@ -491,6 +564,7 @@ export function PetGallery({
               onToggle={(v) => toggleColor(v as ColorFamily)}
               tone="color"
               dotColors={FAMILY_DOT}
+              max={8}
             />
           </FilterRow>
           {facets.batches.length > 0 ? (
@@ -590,6 +664,7 @@ type FilterChipsProps = {
   active: Set<string>;
   onToggle: (value: string) => void;
   tone: "kind" | "vibe" | "color" | "batch";
+  max?: number;
   dotColors?: Partial<Record<string, string>>;
 };
 
@@ -601,21 +676,34 @@ function FilterChips({
   onToggle,
   tone,
   dotColors,
+  max,
 }: FilterChipsProps) {
+  const [expanded, setExpanded] = useState(false);
+  const withCounts = options.filter((value) => (counts[value] ?? 0) > 0);
+  // Count-descending: the facets people actually use come first, but
+  // an ACTIVE chip is never hidden behind the fold.
+  const sorted = [...withCounts].sort(
+    (a, b) =>
+      Number(active.has(b)) - Number(active.has(a)) ||
+      (counts[b] ?? 0) - (counts[a] ?? 0),
+  );
+  const limit = max && !expanded ? max : sorted.length;
+  const visible = sorted.slice(0, limit);
+  const hidden = sorted.length - visible.length;
   return (
     <>
-      {options.map((value) => {
+      {visible.map((value) => {
         const count = counts[value] ?? 0;
         if (count === 0) return null;
         const isActive = active.has(value);
         const dotClass =
           tone === "kind"
-            ? "bg-[#0a0a0a]/70 group-aria-pressed/toggle:bg-on-inverse/70"
+            ? "bg-foreground/60"
             : tone === "vibe"
-              ? "bg-brand group-aria-pressed/toggle:bg-on-inverse"
+              ? "bg-brand"
               : tone === "color"
                 ? ""
-                : "bg-sky-500 group-aria-pressed/toggle:bg-on-inverse";
+                : "bg-sky-500";
         const dotColor = dotColors?.[value];
         const label = labels?.[value] ?? value;
         return (
@@ -634,12 +722,21 @@ function FilterChips({
               style={dotColor ? { backgroundColor: dotColor } : undefined}
             />
             <span>{label}</span>
-            <span className="font-mono text-[9px] text-muted-3 group-aria-pressed/toggle:text-on-inverse/60">
+            <span className="font-mono text-[9px] text-muted-3 group-aria-pressed/toggle:text-brand/70">
               {count}
             </span>
           </Toggle>
         );
       })}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="inline-flex h-7 items-center rounded-full px-2 font-mono text-[10px] text-muted-3 transition hover:text-foreground"
+        >
+          +{hidden} more
+        </button>
+      ) : null}
     </>
   );
 }
@@ -796,9 +893,6 @@ function PetCardImpl({
   const href = `/pets/${pet.slug}`;
   const formattedInstallCount = formatLocalizedNumber(installCount, locale);
   const previewSrc = petPreviewUrlForSource(pet.slug, pet.spritesheetPath);
-  const batchLabel = pet.approvedAt
-    ? formatBatchLabel(getBatchKey(new Date(pet.approvedAt)))
-    : null;
   const usesProfilePinHover = actionMode === "profilePinHover";
   // Every card with a dominantColor gets the same accent treatment.
   // Featured cards keep the same look + add a brand badge in the corner
@@ -819,39 +913,16 @@ function PetCardImpl({
     <article
       data-slot="card"
       style={accentStyle}
-      className="group relative flex h-full flex-col overflow-hidden rounded-3xl border border-black/10 bg-surface/76 shadow-sm shadow-blue-950/5 backdrop-blur transition has-[[aria-expanded=true]]:z-30 has-[[aria-expanded=true]]:-translate-y-0.5 has-[[aria-expanded=true]]:bg-white has-[[aria-expanded=true]]:shadow-xl has-[[aria-expanded=true]]:shadow-blue-950/10 hover:-translate-y-0.5 hover:bg-white hover:shadow-xl hover:shadow-blue-950/10 dark:border-white/10 dark:has-[[aria-expanded=true]]:bg-stone-800 dark:hover:bg-stone-800"
+      className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-border-base bg-surface/70 backdrop-blur transition has-[[aria-expanded=true]]:z-30 has-[[aria-expanded=true]]:border-brand/30 has-[[aria-expanded=true]]:bg-surface hover:-translate-y-0.5 hover:border-brand/30 hover:bg-surface"
     >
-      {/* Inset accent tab — short bar floating inside the card near the top,
-          centered horizontally, like the colored tab on a tab folder or a
-          file divider. Same treatment for featured & non-featured; the
-          featured badge in the top-right does the special-case signaling. */}
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute top-3 left-1/2 h-[3px] w-24 -translate-x-1/2 rounded-full transition-opacity ${
-          pet.dominantColor ? "opacity-80 group-hover:opacity-100" : "opacity-0"
-        }`}
-        style={
-          pet.dominantColor
-            ? { backgroundColor: "var(--pet-accent)" }
-            : undefined
-        }
-      />
       <Link
         href={href}
         prefetch={false}
         aria-label={`Open ${pet.displayName}`}
         className="flex flex-1 flex-col rounded-3xl"
       >
-        <div className="flex items-center justify-between rounded-t-3xl border-b border-black/[0.06] px-5 pt-4 pr-5 pb-3 dark:border-white/[0.06]">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] tracking-[0.22em] text-muted-3 uppercase">
-              No. {dexLabel}
-            </span>
-          </div>
-        </div>
-
         <div
-          className="pet-sprite-stage relative flex items-center justify-center overflow-hidden px-5 py-6"
+          className="pet-sprite-stage relative flex items-center justify-center overflow-hidden px-5 py-7"
           style={
             pet.dominantColor
               ? {
@@ -864,6 +935,9 @@ function PetCardImpl({
               : undefined
           }
         >
+          <span className="pointer-events-none absolute top-2.5 left-3.5 font-mono text-[9px] tracking-[0.2em] text-muted-4 uppercase">
+            No. {dexLabel}
+          </span>
           <PetSprite
             src={previewSrc ?? pet.spritesheetPath}
             layout={previewSrc ? "row" : "atlas"}
@@ -898,17 +972,18 @@ function PetCardImpl({
                 />
               ))
             : null}
-          {installCount > 0 ? (
-            <span className="pointer-events-none absolute right-5 bottom-2 font-mono text-[10px] tracking-[0.22em] text-muted-4 uppercase">
-              {formattedInstallCount} install
-              {installCount === 1 ? "" : "s"}
-            </span>
-          ) : null}
         </div>
 
-        <div className="flex flex-1 flex-col gap-2 border-t border-black/[0.06] px-5 pt-4 pb-3 dark:border-white/[0.06]">
+        <div className="flex flex-1 flex-col gap-1.5 border-t border-black/[0.05] px-4 pt-3 pb-2.5 dark:border-white/[0.05]">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="flex min-w-0 items-center gap-1.5 text-lg font-semibold tracking-tight text-foreground">
+            <h3 className="flex min-w-0 items-center gap-2 text-[15px] font-semibold tracking-tight text-foreground">
+              {pet.dominantColor ? (
+                <span
+                  aria-hidden
+                  className="size-1.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: "var(--pet-accent)" }}
+                />
+              ) : null}
               <span className="truncate">{pet.displayName}</span>
               {pet.featured ? (
                 <span
@@ -919,38 +994,20 @@ function PetCardImpl({
                 </span>
               ) : null}
             </h3>
-            <span className="font-mono text-[10px] tracking-[0.18em] text-muted-4 uppercase">
-              {pet.kind}
-            </span>
+            {installCount > 0 ? (
+              <span className="shrink-0 font-mono text-[10px] tracking-[0.12em] text-muted-4">
+                ↓ {formattedInstallCount}
+              </span>
+            ) : null}
           </div>
           <p
             className={cn(
-              "line-clamp-2 text-sm text-muted-2",
-              isZh ? "leading-tight" : "leading-6",
+              "line-clamp-1 text-[13px] text-muted-2",
+              isZh ? "leading-tight" : "leading-5",
             )}
           >
             {pet.description}
           </p>
-          {batchLabel ? (
-            <Badge
-              variant="outline"
-              className="w-fit rounded-full border-black/[0.08] bg-black/[0.03] font-mono text-[10px] tracking-[0.12em] text-muted-2 uppercase dark:border-white/[0.1] dark:bg-white/[0.04]"
-            >
-              {batchLabel}
-            </Badge>
-          ) : null}
-          {pet.vibes.length > 0 ? (
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {pet.vibes.map((vibe) => (
-                <span
-                  key={vibe}
-                  className="font-mono text-[10px] tracking-[0.12em] text-muted-3 uppercase"
-                >
-                  #{vibe}
-                </span>
-              ))}
-            </div>
-          ) : null}
           {isDiscovered ? (
             <Badge
               variant="outline"
@@ -963,7 +1020,7 @@ function PetCardImpl({
           ) : null}
 
           {pet.submittedBy && !hideAuthor ? (
-            <div className="mt-2 flex items-center gap-1.5 border-t border-black/[0.05] pt-2 font-mono text-[10px] tracking-[0.12em] text-muted-3 uppercase dark:border-white/[0.05]">
+            <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] tracking-[0.12em] text-muted-3 uppercase">
               {pet.submittedBy.imageUrl &&
               isAllowedAvatarUrl(pet.submittedBy.imageUrl) ? (
                 // biome-ignore lint/performance/noImgElement: avatar allowlisted above
@@ -981,7 +1038,7 @@ function PetCardImpl({
 
       {/* Footer bar — outside the card-wide Link so each button can
           fire its own action without bubbling up to navigation. */}
-      <div className="mt-auto rounded-b-3xl">
+      <div className="mt-auto rounded-b-2xl transition-opacity duration-200 md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100">
         <PetCardFooter
           slug={pet.slug}
           displayName={pet.displayName}
@@ -1054,7 +1111,7 @@ function PetCardImpl({
 
           {/* Action menu lives outside the Link so its clicks don't navigate.
  Absolute-positioned to overlap the featured badge corner. */}
-          <div className="absolute top-3 right-4 z-20">
+          <div className="absolute top-2.5 right-3 z-20 transition-opacity duration-200 md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100">
             <PetActionMenu
               pet={{
                 slug: pet.slug,

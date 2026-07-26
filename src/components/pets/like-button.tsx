@@ -63,7 +63,7 @@ export function LikeButton({ slug }: LikeButtonProps) {
       variant="outline"
       onClick={requestAuth}
       aria-busy={loading || undefined}
-      className="h-10 gap-2 rounded-full border border-black/10 bg-surface px-4 text-sm font-medium text-muted-2 transition hover:border-rose-300 hover:text-rose-700 disabled:opacity-60 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:border-rose-700"
+      className="h-9 gap-1.5 rounded-full border border-border-base bg-surface/70 px-3.5 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:border-rose-400/40 hover:text-rose-500 disabled:opacity-60"
     >
       <Heart className="size-4 transition" />
       <span className="font-mono text-xs tracking-[0.08em]">

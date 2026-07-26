@@ -30,7 +30,7 @@ export function LocaleSwitcher() {
   return (
     <Suspense
       fallback={
-        <span className="grid size-10 place-items-center rounded-full border border-border-base bg-surface/70 text-muted-2">
+        <span className="grid size-8 place-items-center rounded-full border border-border-base bg-surface/70 text-muted-2">
           <Globe className="size-4" />
         </span>
       }
@@ -82,7 +82,7 @@ function LocaleSwitcherInner() {
           <button
             type="button"
             aria-label={`${t("language")}: ${current.label}`}
-            className="inline-flex h-10 items-center gap-2 rounded-full border border-border-base bg-surface/70 px-3 text-xs font-semibold tracking-[0.2em] text-muted-2 uppercase backdrop-blur transition hover:bg-white data-popup-open:bg-surface data-popup-open:text-foreground dark:hover:bg-stone-800"
+            className="inline-flex h-8 items-center gap-2 rounded-full border border-border-base bg-surface/70 px-3 text-xs font-semibold tracking-[0.2em] text-muted-2 uppercase backdrop-blur transition hover:bg-surface-muted hover:text-foreground data-popup-open:bg-surface-muted data-popup-open:text-foreground"
           />
         }
       >
@@ -93,7 +93,7 @@ function LocaleSwitcherInner() {
       <PopoverContent
         align="end"
         sideOffset={8}
-        className="z-[70] min-w-40 gap-0 overflow-hidden rounded-2xl border border-border-base bg-surface p-0 shadow-xl shadow-blue-950/15"
+        className="z-[70] min-w-40 gap-0 overflow-hidden rounded-2xl border border-border-base bg-surface p-0 shadow-xl shadow-blue-950/15 origin-(--transform-origin) transition-[opacity,transform] duration-150 ease-out data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
       >
         {OPTIONS.map((option) => (
           <button
@@ -101,7 +101,7 @@ function LocaleSwitcherInner() {
             type="button"
             disabled={isPending}
             onClick={() => selectLocale(option.locale)}
-            className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm text-foreground transition hover:bg-surface-muted disabled:cursor-wait disabled:opacity-70"
+            className="flex w-full items-center justify-between px-3 py-2 text-left text-[13px] text-foreground transition hover:bg-surface-muted disabled:cursor-wait disabled:opacity-70"
           >
             <span>{option.label}</span>
             <span className="font-mono text-xs tracking-[0.2em] text-muted-2 uppercase">

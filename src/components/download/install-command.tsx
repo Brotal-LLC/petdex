@@ -85,7 +85,7 @@ export function InstallCommand({ slug, displayName }: InstallCommandProps) {
   const shellLabel = isWin ? "PowerShell" : "Curl";
 
   return (
-    <div className="rounded-2xl border border-border-base bg-surface/80 p-5 shadow-sm shadow-blue-950/5 backdrop-blur">
+    <div className="rounded-2xl border border-border-base bg-surface/60 p-4 backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <Terminal className="size-4" />
@@ -129,47 +129,55 @@ export function InstallCommand({ slug, displayName }: InstallCommandProps) {
         codexPrompt={tab === "cli" ? cliCmd : undefined}
       />
 
-      {platform === "macos" ? (
-        <div className="mt-3 rounded-2xl border border-border-base bg-surface-muted/70 px-4 py-3">
-          <p className="text-xs font-semibold text-foreground">
-            {t("macHelp.title")}
-          </p>
-          <ol className="mt-2 space-y-1 text-xs leading-5 text-muted-2">
-            <li>{t("macHelp.openTerminal")}</li>
-            <li>{t("macHelp.pasteCommand")}</li>
-            <li>{t("macHelp.returnToCodex")}</li>
+      {/* Platform hint and the activate steps share a row on md+ so
+          the card doesn't stack three full-width text bands. */}
+      <div className="mt-3 grid gap-3 md:grid-cols-2 md:items-start">
+        {platform === "macos" ? (
+          <div className="rounded-xl border border-border-base bg-surface-muted/70 px-3.5 py-2.5">
+            <p className="text-xs font-semibold text-foreground">
+              {t("macHelp.title")}
+            </p>
+            <ol className="mt-1.5 space-y-1 text-xs leading-5 text-muted-2">
+              <li>{t("macHelp.openTerminal")}</li>
+              <li>{t("macHelp.pasteCommand")}</li>
+              <li>{t("macHelp.returnToCodex")}</li>
+            </ol>
+          </div>
+        ) : null}
+
+        <div className={platform === "macos" ? "" : "md:col-span-2"}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <MousePointerClick className="size-4" />
+            {t("activateStep")}
+          </div>
+          <ol className="mt-1.5 space-y-1 text-xs leading-5 text-muted-2">
+            <li>
+              {t("steps.openCodex")}{" "}
+              <span className="font-mono text-foreground">Settings</span>,{" "}
+              <span className="font-mono text-foreground">Appearance</span>,{" "}
+              <span className="font-mono text-foreground">Pets</span>.
+            </li>
+            <li>
+              {t.rich("steps.findPet", {
+                displayName,
+                strong: (chunks) => (
+                  <strong className="text-foreground">{chunks}</strong>
+                ),
+              })}{" "}
+              <span className="font-mono text-foreground">Custom pets</span>{" "}
+              {t("steps.andClick")}{" "}
+              <span className="font-mono text-foreground">Select</span>.
+            </li>
+            <li>
+              {t("steps.use")}{" "}
+              <code className="rounded bg-surface-muted px-1.5 py-0.5">
+                /pet
+              </code>{" "}
+              {t("steps.insideCodex")}
+            </li>
           </ol>
         </div>
-      ) : null}
-
-      <div className="mt-5 flex items-center gap-2 text-sm font-semibold text-foreground">
-        <MousePointerClick className="size-4" />
-        {t("activateStep")}
       </div>
-      <ol className="mt-2 space-y-1 text-xs leading-5 text-muted-2">
-        <li>
-          {t("steps.openCodex")}{" "}
-          <span className="font-mono text-foreground">Settings</span>,{" "}
-          <span className="font-mono text-foreground">Appearance</span>,{" "}
-          <span className="font-mono text-foreground">Pets</span>.
-        </li>
-        <li>
-          {t.rich("steps.findPet", {
-            displayName,
-            strong: (chunks) => (
-              <strong className="text-foreground">{chunks}</strong>
-            ),
-          })}{" "}
-          <span className="font-mono text-foreground">Custom pets</span>{" "}
-          {t("steps.andClick")}{" "}
-          <span className="font-mono text-foreground">Select</span>.
-        </li>
-        <li>
-          {t("steps.use")}{" "}
-          <code className="rounded bg-surface-muted px-1.5 py-0.5">/pet</code>{" "}
-          {t("steps.insideCodex")}
-        </li>
-      </ol>
     </div>
   );
 }

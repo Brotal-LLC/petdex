@@ -117,7 +117,7 @@ export function CollectionEditor({
   }
 
   return (
-    <section className="rounded-3xl border border-black/10 bg-surface/80 p-5 backdrop-blur dark:border-white/10">
+    <section className="rounded-2xl border border-border-base bg-surface/60 p-5 backdrop-blur">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] tracking-[0.22em] text-brand uppercase">
@@ -246,7 +246,7 @@ export function CollectionEditor({
                     aria-pressed={selected}
                     className={`flex h-11 items-center justify-between rounded-2xl border px-3 text-left text-sm transition ${
                       selected
-                        ? "border-brand bg-brand text-white shadow-sm shadow-brand/20"
+                        ? "border-brand/40 bg-brand/15 text-brand"
                         : "border-border-base bg-background text-muted-2 hover:bg-surface-muted hover:text-foreground"
                     }`}
                   >
@@ -290,7 +290,7 @@ export function CollectionEditor({
                       {pet.displayName}
                     </span>
                     {pet.slug === coverPetSlug ? (
-                      <span className="rounded-full bg-brand px-2 py-0.5 font-mono text-[9px] tracking-[0.12em] text-white uppercase">
+                      <span className="rounded-full bg-brand/15 px-2 py-0.5 font-mono text-[9px] tracking-[0.12em] text-brand uppercase ring-1 ring-brand/25">
                         Hero
                       </span>
                     ) : null}

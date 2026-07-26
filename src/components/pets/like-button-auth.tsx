@@ -138,11 +138,11 @@ export function LikeButton({ slug }: LikeButtonProps) {
       aria-pressed={liked}
       aria-busy={disabled || undefined}
       disabled={disabled}
-      className={`h-10 gap-2 rounded-full border px-4 text-sm font-medium transition disabled:opacity-60 ${
+      className={`h-9 gap-1.5 rounded-full border px-3.5 text-[13px] font-medium backdrop-blur transition disabled:opacity-60 ${
         liked
-          ? "border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
-          : "border-black/10 bg-surface text-muted-2 hover:border-rose-300 hover:text-rose-700"
-      } dark:bg-rose-950/40 dark:text-rose-300 dark:hover:border-rose-700`}
+          ? "border-rose-400/30 bg-rose-500/10 text-rose-500 hover:bg-rose-500/15"
+          : "border-border-base bg-surface/70 text-muted-2 hover:border-rose-400/40 hover:text-rose-500"
+      }`}
     >
       <Heart
         className={`size-4 transition ${liked ? "fill-rose-500 text-rose-500" : ""}`}

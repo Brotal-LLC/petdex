@@ -19,10 +19,14 @@ import { useTranslations } from "next-intl";
 import { petStates } from "@/lib/pet-states";
 import { deriveSlug } from "@/lib/slug";
 
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+
 type ParsedPet = {
   petId: string;
   displayName: string;
   description: string;
+  petJson: Record<string, unknown>;
   zipBlob: Blob;
   zipFileName: string;
   spritesheetBlob: Blob;
@@ -32,8 +36,11 @@ type ParsedPet = {
   spritesheetWidth: number;
   spritesheetHeight: number;
   issues: string[];
-  source: "folder" | "zip";
+  source: "folder" | "zip" | "spritesheet";
 };
+
+const MAX_DISPLAY_NAME_LENGTH = 60;
+const MAX_DESCRIPTION_LENGTH = 500;
 
 type SubmissionReviewOutcome = {
   decision: "approved" | "rejected" | "hold";
@@ -73,6 +80,12 @@ export function PetSubmitForm() {
     kind: "idle",
   });
 
+  // Editable copies of displayName/description. handleFiles() re-seeds these
+  // from the parsed (or placeholder-generated) pet.json every time a new
+  // package is read; the user can then override them before submit.
+  const [editedDisplayName, setEditedDisplayName] = useState("");
+  const [editedDescription, setEditedDescription] = useState("");
+
   const uploadErrorRef = useRef<string | null>(null);
   const [, setUploadError] = useState<string | null>(null);
 
@@ -92,9 +105,19 @@ export function PetSubmitForm() {
       const items = [...files];
       // True folder upload has a "/" inside webkitRelativePath
       // (e.g. "boba/pet.json"). A single dropped file via webkitGetAsEntry
-      // gets stamped with just its filename, so we treat that as zip mode.
+      // gets stamped with just its filename, so we treat that as zip mode
+      // unless it's a bare spritesheet image (ChatGPT/Codex Desktop pet
+      // sharing exports a single PNG/WebP with no pet.json alongside it).
       const fromFolder = items.some((f) => f.webkitRelativePath?.includes("/"));
-      const source: "folder" | "zip" = fromFolder ? "folder" : "zip";
+      const bareSpritesheetFile =
+        !fromFolder && items.length === 1 && isSpritesheetImage(items[0])
+          ? items[0]
+          : null;
+      const source: "folder" | "zip" | "spritesheet" = fromFolder
+        ? "folder"
+        : bareSpritesheetFile
+          ? "spritesheet"
+          : "zip";
 
       let petJsonString = "";
       let spritesheetBlob: Blob = new Blob();
@@ -158,6 +181,39 @@ export function PetSubmitForm() {
           });
           zipFileName = `${folderName}.zip`;
         }
+      } else if (bareSpritesheetFile) {
+        // ── Bare spritesheet path (ChatGPT/Codex Desktop pet export) ─────
+        spritesheetBlob = bareSpritesheetFile;
+        spritesheetExt = bareSpritesheetFile.name
+          .toLowerCase()
+          .endsWith(".webp")
+          ? "webp"
+          : "png";
+        petIdFromName = deriveIdFromSpritesheetName(bareSpritesheetFile.name);
+        // The spritesheetMissingPetInfo issue is derived at render time from
+        // the editable displayName field (see effectiveIssues below), not
+        // pushed here — the placeholder name is only a problem until the
+        // user edits it, and there's now a field to do that in.
+
+        // pet.json isn't generated here — width/height aren't known until
+        // the shared measurement step below runs, and the server only
+        // needs the JSON string, not the exact validated dimensions.
+        const generatedPetJson = {
+          id: petIdFromName,
+          displayName: t("defaults.untitledPet"),
+          description: t("defaults.description"),
+          spritesheetPath: `spritesheet.${spritesheetExt}`,
+        };
+        petJsonString = JSON.stringify(generatedPetJson, null, 2);
+
+        const zip = new JSZip();
+        zip.file("pet.json", petJsonString);
+        zip.file(`spritesheet.${spritesheetExt}`, spritesheetBlob);
+        zipBlob = await zip.generateAsync({
+          type: "blob",
+          compression: "DEFLATE",
+        });
+        zipFileName = `${petIdFromName}.zip`;
       } else {
         // ── ZIP upload path (legacy) ────────────────────────────────────
         const zipFile = items.find((f) => f.name.endsWith(".zip"));
@@ -166,6 +222,7 @@ export function PetSubmitForm() {
             petId: "missing",
             displayName: t("defaults.missingFiles"),
             description: t("drop.short"),
+            petJson: {},
             zipBlob: new Blob(),
             zipFileName: "",
             spritesheetBlob: new Blob(),
@@ -177,6 +234,8 @@ export function PetSubmitForm() {
             issues: [t("issues.dropPetFolderOrZip")],
             source: "zip",
           });
+          setEditedDisplayName(t("defaults.missingFiles"));
+          setEditedDescription(t("drop.short"));
           return;
         }
 
@@ -272,6 +331,7 @@ export function PetSubmitForm() {
         petId,
         displayName,
         description,
+        petJson,
         zipBlob,
         zipFileName,
         spritesheetBlob,
@@ -283,30 +343,60 @@ export function PetSubmitForm() {
         issues,
         source,
       });
+      setEditedDisplayName(displayName);
+      setEditedDescription(description);
     } finally {
       setIsReading(false);
     }
   }
 
   async function handleSubmit() {
-    if (!parsed || parsed.issues.length > 0) return;
+    const effectiveIssues = getEffectiveIssues(
+      parsed,
+      t("issues.spritesheetMissingPetInfo"),
+      editedDisplayName,
+      t("defaults.untitledPet"),
+    );
+    if (!parsed || effectiveIssues.length > 0) return;
     if (!isSignedIn) return;
+
+    const displayName = editedDisplayName.trim();
+    const description = editedDescription.trim();
 
     setSubmission({ kind: "uploading", step: "validating" });
 
-    const zipFile = new File([parsed.zipBlob], parsed.zipFileName, {
+    // Rebuild pet.json with the edited displayName/description so the zip's
+    // manifest matches the submitted fields. The server compares them
+    // (scanPetManifestsSecurity's pet_json_manifest_mismatch check) and
+    // holds the submission if they drift apart.
+    const updatedPetJson = {
+      ...parsed.petJson,
+      id: parsed.petId,
+      displayName,
+      description,
+    };
+    const petJsonString = JSON.stringify(updatedPetJson, null, 2);
+    const zip = new JSZip();
+    zip.file("pet.json", petJsonString);
+    zip.file(`spritesheet.${parsed.spritesheetExt}`, parsed.spritesheetBlob);
+    const zipBlob = await zip.generateAsync({
+      type: "blob",
+      compression: "DEFLATE",
+    });
+
+    const zipFile = new File([zipBlob], parsed.zipFileName, {
       type: "application/zip",
     });
     const spriteMime =
       parsed.spritesheetExt === "png" ? "image/png" : "image/webp";
     const spriteFile = new File(
       [parsed.spritesheetBlob],
-      `${deriveSlug(parsed.petId, parsed.displayName)}-spritesheet.${parsed.spritesheetExt}`,
+      `${deriveSlug(parsed.petId, displayName)}-spritesheet.${parsed.spritesheetExt}`,
       { type: spriteMime },
     );
     const petJsonFile = new File(
-      [parsed.petJsonString],
-      `${deriveSlug(parsed.petId, parsed.displayName)}-pet.json`,
+      [petJsonString],
+      `${deriveSlug(parsed.petId, displayName)}-pet.json`,
       { type: "application/json" },
     );
 
@@ -324,7 +414,7 @@ export function PetSubmitForm() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          slugHint: deriveSlug(parsed.petId, parsed.displayName),
+          slugHint: deriveSlug(parsed.petId, displayName),
           files: [
             {
               role: "zip",
@@ -423,8 +513,8 @@ export function PetSubmitForm() {
         zipUrl,
         spritesheetUrl,
         petJsonUrl,
-        displayName: parsed.displayName,
-        description: parsed.description,
+        displayName,
+        description,
         petId: parsed.petId,
         spritesheetWidth: parsed.spritesheetWidth,
         spritesheetHeight: parsed.spritesheetHeight,
@@ -448,11 +538,18 @@ export function PetSubmitForm() {
     setSubmission({
       kind: "success",
       slug: data.slug,
-      displayName: parsed.displayName,
+      displayName,
       status: data.status,
       review: data.review,
     });
   }
+
+  const effectiveIssues = getEffectiveIssues(
+    parsed,
+    t("issues.spritesheetMissingPetInfo"),
+    editedDisplayName,
+    t("defaults.untitledPet"),
+  );
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
@@ -534,6 +631,20 @@ export function PetSubmitForm() {
               }
             />
           </label>
+          <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-4 text-xs font-medium text-foreground transition hover:bg-surface">
+            <Upload className="size-3.5" />
+            {t("drop.pickSpritesheet")}
+            <input
+              type="file"
+              accept=".png,.webp"
+              className="sr-only"
+              onChange={(event) =>
+                void handleFiles(event.target.files).then(() => {
+                  event.target.value = "";
+                })
+              }
+            />
+          </label>
         </div>
 
         {!isLoaded ? null : !isSignedIn ? (
@@ -559,22 +670,52 @@ export function PetSubmitForm() {
             {parsed.spritesheetUrl ? (
               <SpritePreview src={parsed.spritesheetUrl} />
             ) : null}
-            <div>
-              <h2 className="text-xl font-medium">{parsed.displayName}</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-2">
-                {parsed.description}
-              </p>
+            <div className="space-y-3">
+              <div>
+                <label
+                  htmlFor="pet-display-name"
+                  className="font-mono text-[10px] tracking-[0.18em] text-muted-4 uppercase"
+                >
+                  {t("edit.displayNameLabel")}
+                </label>
+                <Input
+                  id="pet-display-name"
+                  className="mt-1 h-9 rounded-xl px-3 text-sm"
+                  value={editedDisplayName}
+                  maxLength={MAX_DISPLAY_NAME_LENGTH}
+                  placeholder={t("edit.displayNamePlaceholder")}
+                  onChange={(event) => setEditedDisplayName(event.target.value)}
+                  disabled={submission.kind === "uploading"}
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="pet-description"
+                  className="font-mono text-[10px] tracking-[0.18em] text-muted-4 uppercase"
+                >
+                  {t("edit.descriptionLabel")}
+                </label>
+                <Textarea
+                  id="pet-description"
+                  className="mt-1 rounded-xl px-3 py-2 text-sm"
+                  value={editedDescription}
+                  maxLength={MAX_DESCRIPTION_LENGTH}
+                  placeholder={t("edit.descriptionPlaceholder")}
+                  onChange={(event) => setEditedDescription(event.target.value)}
+                  disabled={submission.kind === "uploading"}
+                />
+              </div>
               {parsed.spritesheetWidth ? (
-                <p className="mt-2 font-mono text-[10px] tracking-[0.18em] text-muted-4 uppercase">
+                <p className="font-mono text-[10px] tracking-[0.18em] text-muted-4 uppercase">
                   {parsed.spritesheetWidth}×{parsed.spritesheetHeight}
                 </p>
               ) : null}
             </div>
-            {parsed.issues.length > 0 ? (
+            {effectiveIssues.length > 0 ? (
               <div className="flex items-start gap-2 rounded-2xl bg-chip-warning-bg p-4 text-sm leading-6 text-chip-warning-fg">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <ul className="space-y-1">
-                  {parsed.issues.map((issue) => (
+                  {effectiveIssues.map((issue) => (
                     <li key={issue}>{issue}</li>
                   ))}
                 </ul>
@@ -588,7 +729,7 @@ export function PetSubmitForm() {
 
             <SubmitButton
               disabled={
-                parsed.issues.length > 0 ||
+                effectiveIssues.length > 0 ||
                 !isSignedIn ||
                 submission.kind === "uploading" ||
                 submission.kind === "success"
@@ -607,6 +748,8 @@ export function PetSubmitForm() {
                       parsed,
                       submission.message,
                       user?.id ?? null,
+                      editedDisplayName,
+                      editedDescription,
                     )}
                     target="_blank"
                     rel="noreferrer"
@@ -843,6 +986,47 @@ function SpritePreview({ src }: { src: string }) {
   );
 }
 
+// The spritesheetMissingPetInfo issue is pushed once at parse time (see
+// handleFiles, bare-spritesheet path) using the pre-edit placeholder name.
+// Whether it still applies depends on the *current* value of the editable
+// displayName field, not on where the file came from — so it's cleared here
+// once the user has typed a real name, instead of being baked into
+// parsed.issues permanently.
+function getEffectiveIssues(
+  parsed: ParsedPet | null,
+  placeholderIssueText: string,
+  currentDisplayName: string,
+  untitledPlaceholder: string,
+): string[] {
+  if (!parsed) return [];
+  const hasRealName =
+    currentDisplayName.trim().length > 0 &&
+    currentDisplayName.trim() !== untitledPlaceholder;
+  return parsed.issues.filter(
+    (issue) => hasRealName || issue !== placeholderIssueText,
+  );
+}
+
+function isSpritesheetImage(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return (
+    !name.endsWith(".zip") && (name.endsWith(".png") || name.endsWith(".webp"))
+  );
+}
+
+// ChatGPT/Codex Desktop pet sharing exports files named
+// "pet_<hash>-spritesheet.png". Stripping that pattern leaves nothing
+// usable, so the caller falls back to "untitled" and the fallback GitHub
+// issue flow lets the user supply a real name/description.
+function deriveIdFromSpritesheetName(fileName: string): string {
+  const base = fileName.replace(/\.(png|webp)$/i, "");
+  const stripped = base
+    .replace(/^pet_[a-f0-9]+-spritesheet$/i, "")
+    .replace(/-spritesheet$/i, "")
+    .trim();
+  return stripped || "untitled";
+}
+
 function measureImage(url: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -906,11 +1090,17 @@ function buildIssueUrl(
   parsed: ParsedPet | null,
   message: string | undefined,
   userId: string | null,
+  editedDisplayName?: string,
+  editedDescription?: string,
 ): string {
-  const title = parsed?.displayName
-    ? `[Submit fail] ${parsed.displayName}`
+  // Prefer the edited fields the user actually submitted over the original
+  // parsed snapshot, since this fallback link only renders after a failed
+  // submit attempt (i.e. after the user has had a chance to edit).
+  const displayName = editedDisplayName?.trim() || parsed?.displayName;
+  const description = (editedDescription ?? parsed?.description)?.trim();
+  const title = displayName
+    ? `[Submit fail] ${displayName}`
     : "[Submit fail] Petdex upload";
-  const description = parsed?.description?.trim();
   const sizeText = parsed?.spritesheetWidth
     ? `${parsed.spritesheetWidth}×${parsed.spritesheetHeight}`
     : "n/a";
@@ -928,7 +1118,7 @@ function buildIssueUrl(
     "",
     "## What the form captured",
     "",
-    `- **Pet name:** ${parsed?.displayName ?? "n/a"}`,
+    `- **Pet name:** ${displayName ?? "n/a"}`,
     `- **Pet id:** ${parsed?.petId ?? "n/a"}`,
     `- **Sprite size:** ${sizeText}`,
     `- **Source:** ${parsed?.source ?? "n/a"}`,

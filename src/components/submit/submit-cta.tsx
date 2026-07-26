@@ -8,21 +8,23 @@ type SubmitCTAProps = {
   className?: string;
   children?: React.ReactNode;
   href?: string;
+  variant?: "petdex-cta" | "petdex-secondary" | "petdex-inverse";
 };
 
-const DEFAULT_CLASS =
-  "inline-flex h-10 items-center justify-center rounded-full bg-inverse px-4 text-sm font-medium text-on-inverse transition hover:bg-inverse-hover";
+const DEFAULT_CLASS = "";
 
 export function SubmitCTA({
   className = DEFAULT_CLASS,
   children = "Submit a pet",
   href = "/submit",
+  variant = "petdex-cta",
 }: SubmitCTAProps) {
   return (
     <Button
-      variant="petdex-cta"
+      variant={variant}
       size="petdex-pill"
       className={className}
+      nativeButton={false}
       render={<Link href={href} prefetch={false} />}
     >
       {children}

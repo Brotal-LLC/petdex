@@ -110,8 +110,8 @@ export function SaveAsSticker({ slug, displayName }: Props) {
   }
 
   const ctaClasses = isZh
-    ? "bg-[#07C160] hover:bg-[#06ae56] dark:bg-[#0a7d4d] dark:hover:bg-[#0c8c57]"
-    : "bg-[#25D366] hover:bg-[#1EBE5D] dark:bg-[#168649] dark:hover:bg-[#1c9a55]";
+    ? "bg-[#07C160] text-white hover:bg-[#06ae56] dark:bg-[#0a7d4d] dark:hover:bg-[#0c8c57]"
+    : "border border-border-base bg-surface/70 text-muted-2 backdrop-blur hover:bg-surface-muted hover:text-foreground";
 
   return (
     <div className="relative inline-block">
@@ -121,31 +121,27 @@ export function SaveAsSticker({ slug, displayName }: Props) {
             <button
               type="button"
               aria-label={displayName}
-              className={`inline-flex h-10 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium text-white shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 ${ctaClasses}`}
+              className={`inline-flex h-9 items-center justify-center gap-2 rounded-full px-3.5 text-[13px] font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 ${ctaClasses}`}
             />
           }
         >
           {isZh ? (
-            <WeChatIcon className="w-4 h-4 text-white" />
+            <WeChatIcon className="w-4 h-4 text-[#25D366]" />
           ) : (
-            <WhatsAppIcon className="w-4 h-4 text-white" />
+            <WhatsAppIcon className="w-4 h-4 text-[#25D366]" />
           )}
           {t("ctaShort")}
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent
-          align="end"
-          sideOffset={6}
-          className="w-80 rounded-lg border border-border bg-popover p-0 shadow-xl"
-        >
-          <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
+        <DropdownMenuContent align="end" sideOffset={6} className="w-80 p-0">
+          <div className="border-b border-foreground/[0.06] px-3 py-2 text-xs text-muted-3">
             {isZh ? t("hintWeChat") : t("hintGeneric")}
           </div>
 
           <DropdownMenuItem
             closeOnClick={false}
             onClick={downloadAnimated}
-            className="flex items-center gap-3 px-3 py-2 text-sm text-left"
+            className="gap-3"
           >
             {status === "working" ? (
               <Play className="w-4 h-4 animate-pulse text-amber-400" />
@@ -161,7 +157,7 @@ export function SaveAsSticker({ slug, displayName }: Props) {
                   {t("recommendedTag")}
                 </span>
               </div>
-              <div className="text-xs text-muted-foreground">
+              <div className="text-xs text-muted-3">
                 {t("downloadAnimatedDesc")}
               </div>
             </div>
@@ -172,7 +168,7 @@ export function SaveAsSticker({ slug, displayName }: Props) {
           <DropdownMenuItem
             closeOnClick={false}
             onClick={downloadGif}
-            className="flex items-center gap-3 px-3 py-2 text-sm text-left"
+            className="gap-3"
           >
             {status === "working" ? (
               <Film className="w-4 h-4 animate-pulse text-purple-400" />
@@ -181,9 +177,7 @@ export function SaveAsSticker({ slug, displayName }: Props) {
             )}
             <div className="flex-1">
               <div className="font-medium">{t("downloadGif")}</div>
-              <div className="text-xs text-muted-foreground">
-                {t("downloadGifDesc")}
-              </div>
+              <div className="text-xs text-muted-3">{t("downloadGifDesc")}</div>
             </div>
           </DropdownMenuItem>
 
@@ -192,7 +186,7 @@ export function SaveAsSticker({ slug, displayName }: Props) {
           <DropdownMenuItem
             closeOnClick={false}
             onClick={downloadPack}
-            className="flex items-center gap-3 px-3 py-2 text-sm text-left"
+            className="gap-3"
           >
             {status === "working" ? (
               <Package className="w-4 h-4 animate-pulse text-[#25D366]" />
@@ -203,7 +197,7 @@ export function SaveAsSticker({ slug, displayName }: Props) {
             )}
             <div className="flex-1">
               <div className="font-medium">{t("downloadPack")}</div>
-              <div className="text-xs text-muted-foreground">
+              <div className="text-xs text-muted-3">
                 {t("downloadPackDesc")}
               </div>
             </div>
@@ -214,45 +208,36 @@ export function SaveAsSticker({ slug, displayName }: Props) {
           <DropdownMenuItem
             closeOnClick={false}
             onClick={downloadStaticPng}
-            className="flex items-center gap-3 px-3 py-2 text-sm text-left"
+            className="gap-3"
           >
-            <Download className="w-4 h-4 text-muted-foreground" />
+            <Download className="w-4 h-4 text-muted-3" />
             <div className="flex-1">
               <div className="font-medium">{t("downloadPng")}</div>
-              <div className="text-xs text-muted-foreground">
-                {t("downloadPngDesc")}
-              </div>
+              <div className="text-xs text-muted-3">{t("downloadPngDesc")}</div>
             </div>
           </DropdownMenuItem>
 
           <DropdownMenuItem
             closeOnClick={false}
             onClick={() => void copyToClipboard()}
-            className="flex items-center gap-3 px-3 py-2 text-sm text-left"
+            className="gap-3"
           >
-            <Copy className="w-4 h-4 text-muted-foreground" />
+            <Copy className="w-4 h-4 text-muted-3" />
             <div className="flex-1">
               <div className="font-medium">{t("copyImage")}</div>
-              <div className="text-xs text-muted-foreground">
-                {t("copyImageDesc")}
-              </div>
+              <div className="text-xs text-muted-3">{t("copyImageDesc")}</div>
             </div>
           </DropdownMenuItem>
 
-          <DropdownMenuItem
-            onClick={previewSticker}
-            className="flex items-center gap-3 px-3 py-2 text-sm text-left"
-          >
-            <Sticker className="w-4 h-4 text-muted-foreground" />
+          <DropdownMenuItem onClick={previewSticker} className="gap-3">
+            <Sticker className="w-4 h-4 text-muted-3" />
             <div className="flex-1">
               <div className="font-medium">{t("preview")}</div>
-              <div className="text-xs text-muted-foreground">
-                {t("previewDesc")}
-              </div>
+              <div className="text-xs text-muted-3">{t("previewDesc")}</div>
             </div>
           </DropdownMenuItem>
 
-          <div className="mt-1 space-y-1.5 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+          <div className="mt-1 space-y-1.5 border-t border-foreground/[0.06] px-3 py-2 text-[11px] text-muted-3">
             {isZh && (
               <div className="flex items-start gap-2">
                 <WeChatIcon className="mt-0.5 h-3 w-3 shrink-0 text-[#07C160]" />

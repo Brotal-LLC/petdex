@@ -40,7 +40,7 @@ export async function FacetPage({
 
   return (
     <main className="min-h-dvh bg-background text-foreground">
-      <section className="petdex-cloud relative overflow-hidden">
+      <section className="petdex-hero relative overflow-hidden">
         <div className="relative mx-auto flex w-full max-w-7xl flex-col px-5 pt-5 pb-10 md:px-8">
           <SiteHeader />
           <div className="mt-12 flex flex-col items-center text-center md:mt-16">

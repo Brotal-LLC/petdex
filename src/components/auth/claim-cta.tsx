@@ -36,7 +36,7 @@ export function ClaimCTA(props: ClaimCTAProps) {
   if (authActive && AuthClaimCTA) return <AuthClaimCTA {...props} />;
 
   const inner = (
-    <span className="inline-flex h-10 items-center gap-1.5 rounded-full bg-inverse px-4 text-sm font-medium text-on-inverse transition hover:bg-inverse-hover">
+    <span className="inline-flex h-9 items-center gap-1.5 rounded-full bg-inverse px-3.5 text-[13px] font-medium text-on-inverse transition hover:bg-inverse-hover">
       {t("cta")}
       <ArrowRight className="size-4" />
     </span>

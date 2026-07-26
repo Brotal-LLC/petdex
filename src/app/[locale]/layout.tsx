@@ -66,6 +66,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       t("keywords.developerMascot"),
       t("keywords.terminalPet"),
       t("keywords.codexCompanion"),
+      t("keywords.chatgptPet"),
+      t("keywords.chatgptDesktopPets"),
+      t("keywords.codingAgentPet"),
+      t("keywords.claudeCodePet"),
+      t("keywords.geminiCliPet"),
+      t("keywords.openCodePet"),
+      t("keywords.aiCodingMascot"),
       t("keywords.petdex"),
     ],
     openGraph: {

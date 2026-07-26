@@ -9,11 +9,11 @@
   },
   "metadata": {
     "root": {
-      "titleDefault": "Petdex: Compañeros animados para Codex",
+      "titleDefault": "Petdex: Mascotas animadas para tus agentes de código",
       "titleTemplate": "%s | Petdex",
-      "description": "Petdex es la galería pública de compañeros animados para Codex. Explora compañeros open source, previsualiza sus animaciones e instala uno con un solo comando.",
-      "ogTitle": "Petdex: Compañeros animados para Codex",
-      "twitterTitle": "Petdex: Compañeros animados para Codex",
+      "description": "Petdex es la galería pública de mascotas animadas para agentes de código. Funciona con ChatGPT (Codex), Claude Code, Gemini CLI y OpenCode. Explora mascotas open source, previsualiza sus animaciones e instala una con un solo comando.",
+      "ogTitle": "Petdex: Mascotas animadas para tus agentes de código",
+      "twitterTitle": "Petdex: Mascotas animadas para tus agentes de código",
       "keywords": {
         "codexPet": "mascota de Codex",
         "codexCliPet": "mascota de Codex",
@@ -23,7 +23,14 @@
         "developerMascot": "mascota para desarrolladores",
         "terminalPet": "mascota para terminal",
         "codexCompanion": "compañero de Codex",
-        "petdex": "petdex"
+        "petdex": "petdex",
+        "chatgptPet": "mascota para ChatGPT",
+        "chatgptDesktopPets": "mascotas para ChatGPT desktop",
+        "codingAgentPet": "mascota para agentes de código",
+        "claudeCodePet": "mascota para Claude Code",
+        "geminiCliPet": "mascota para Gemini CLI",
+        "openCodePet": "mascota para OpenCode",
+        "aiCodingMascot": "mascota para programar con IA"
       }
     }
   },
@@ -55,7 +62,7 @@
     "vibesDesc": "Cozy, edgy, místico, heroico y más",
     "build": "Crear",
     "buildDesc": "Hacé y publicá tu pixel pet",
-    "createDesc": "Crea un pet con la skill de Codex, 5 min de idea a sprite",
+    "createDesc": "Crea un pet con la skill Hatch Pet, 5 min de idea a sprite",
     "submitDesc": "Subí tu carpeta y Petdex lo hostea para todos",
     "docsDesc": "Instala el Petdex CLI y publicá pets por npm",
     "builtWith": "Hecho con Petdex",
@@ -76,7 +83,8 @@
     "collaborator": "Colaborador",
     "manageAccount": "Gestionar cuenta",
     "signOut": "Cerrar sesión",
-    "more": "Más"
+    "more": "Más",
+    "explore": "Explorar"
   },
   "theme": {
     "toggle": "Cambiar tema",
@@ -96,9 +104,9 @@
     "sponsorAria": "Patrocinar en GitHub"
   },
   "home": {
-    "eyebrow": "El índice de mascotas de Codex",
+    "eyebrow": "El índice de mascotas para agentes de código",
     "title": "Petdex",
-    "tagline": "La galería pública de compañeros animados para <brand>Codex</brand>. Explora más de {totalPets} compañeros open source, previsualiza sus estados e instala uno con un solo comando.",
+    "tagline": "La galería pública de mascotas animadas para tus <brand>agentes de código</brand>. Explora más de {totalPets} mascotas open source, previsualiza sus estados e instala una con un solo comando.",
     "heroCommand": "npx petdex install boba",
     "downloadCta": "Descargar Petdex Desktop",
     "submitCta": "Enviar",
@@ -118,14 +126,15 @@
       "viewAria": "Ver {name}",
       "spriteAlt": "{name} como mascota sorpresa"
     },
-    "jsonLdDescription": "Galería pública de compañeros animados para Codex. Instala uno con un solo comando.",
-    "jsonLdFeaturedPets": "Mascotas destacadas de Codex",
+    "jsonLdDescription": "Galería pública de mascotas animadas para agentes de código como ChatGPT (Codex), Claude Code, Gemini y OpenCode. Instala una con un solo comando.",
+    "jsonLdFeaturedPets": "Mascotas destacadas para agentes de código",
     "featuredCollections": {
       "eyebrow": "Colecciones destacadas",
       "title": "Colecciones destacadas para instalar",
       "viewAll": "Ver todas",
       "petsCount": "{count, plural, =1 {1 mascota} other {# mascotas}}"
-    }
+    },
+    "worksWith": "Funciona con"
   },
   "community": {
     "metadata": {
@@ -222,12 +231,12 @@
   "submit": {
     "metadata": {
       "title": "Enviar una mascota | Petdex",
-      "description": "Sube y valida un paquete de mascota de Codex para Petdex."
+      "description": "Sube y valida un paquete de mascota para Petdex."
     },
     "eyebrow": "Enviar",
     "title": "Agrega tu mascota a Petdex",
-    "body": "Comparte un paquete de mascota animada compatible con Codex. Petdex revisa los archivos localmente, previsualiza el sprite y prepara el envío.",
-    "createCta": "¿Todavía no tienes una mascota? Créala en Codex",
+    "body": "Comparte un paquete de mascota animada. Petdex revisa los archivos localmente, previsualiza el sprite y prepara el envío.",
+    "createCta": "¿Todavía no tienes una mascota? Créala ahora",
     "legalPrefix": "Al enviar, confirmas que tienes derechos sobre la ilustración o que estás creando fan content. No se permite contenido que glorifique la guerra, el odio o símbolos militaristas; será eliminado. Los titulares pueden pedir la eliminación mediante nuestro",
     "legalLink": "aviso de retiro",
     "legalSuffix": ".",
@@ -238,7 +247,8 @@
         "short": "Arrastra una carpeta o un ZIP con pet.json + spritesheet.",
         "ariaLabel": "Zona para soltar el paquete de mascota",
         "pickFolder": "Elegir carpeta",
-        "pickZip": "Elegir .zip"
+        "pickZip": "Elegir .zip",
+        "pickSpritesheet": "Elegir spritesheet"
       },
       "auth": {
         "signIn": "Inicia sesión para enviar"
@@ -248,6 +258,12 @@
         "reading": "Leyendo paquete...",
         "ready": "Todo listo para enviar.",
         "empty": "Los paquetes se quedan locales hasta que confirmes. Petdex revisa el manifest y las dimensiones del sprite antes de subirlo."
+      },
+      "edit": {
+        "displayNameLabel": "Nombre de la mascota",
+        "displayNamePlaceholder": "Ingresa un nombre",
+        "descriptionLabel": "Descripción",
+        "descriptionPlaceholder": "Ingresa una descripción corta"
       },
       "path": {
         "prefix": "Los assets viven en",
@@ -294,7 +310,7 @@
       "defaults": {
         "missingFiles": "Faltan archivos",
         "untitledPet": "Mascota sin nombre",
-        "description": "Una mascota digital compatible con Codex."
+        "description": "Una mascota digital animada para agentes de código."
       },
       "errors": {
         "uploadFailed": "Falló la subida: {reason}",
@@ -318,7 +334,8 @@
         "invalidJson": "pet.json no es JSON válido.",
         "unreadableSpritesheet": "No se puede leer la imagen del spritesheet.",
         "tooSmall": "El spritesheet parece muy pequeño ({width}×{height}). Usa una grilla de 8×9 frames (recomendado {recommendedWidth}×{recommendedHeight}).",
-        "badGrid": "La grilla del spritesheet es {width}×{height}, que no coincide con la grilla 8×9 (1536×1872) ni la v2 8×11 (1536×2288), así que los frames se verían desalineados."
+        "badGrid": "La grilla del spritesheet es {width}×{height}, que no coincide con la grilla 8×9 (1536×1872) ni la v2 8×11 (1536×2288), así que los frames se verían desalineados.",
+        "spritesheetMissingPetInfo": "No se encontró pet.json junto a este spritesheet, así que se generó un nombre/descripción de relleno. Completa el nombre y la descripción abajo antes de enviar."
       }
     }
   },
@@ -400,25 +417,25 @@
   "create": {
     "metadata": {
       "title": "Crea una mascota | Petdex",
-      "description": "Incuba tu propia mascota de Codex en 5 minutos y luego compártela en Petdex."
+      "description": "Incuba tu propia mascota animada en 5 minutos y luego compártela en Petdex."
     },
     "eyebrow": "Haz la tuya",
-    "title": "Incuba una mascota en Codex",
-    "body": "Codex trae una skill integrada llamada <strong>Hatch Pet</strong> que genera un compañero totalmente animado (9 estados, 1536×1872) a partir de una descripción corta. Cinco minutos desde la idea hasta un sprite que vive dentro de la app.",
+    "title": "Incuba una mascota",
+    "body": "La app de escritorio de ChatGPT trae una skill integrada llamada <strong>Hatch Pet</strong> que genera una mascota totalmente animada (9 estados, 1536×1872) a partir de una descripción corta. Cinco minutos desde la idea hasta un sprite que vive dentro de la app.",
     "steps": {
       "install": {
         "title": "Consigue la skill Hatch Pet",
-        "body": "Abre Codex → <skills>Skills</skills> en la barra superior → encuentra <strong>Hatch Pet</strong> → instala."
+        "body": "Abre la app de escritorio de ChatGPT → <skills>Skills</skills> en la barra superior → encuentra <strong>Hatch Pet</strong> → instala."
       },
       "hatch": {
         "title": "Incuba tu mascota",
-        "beforeCommand": "En el chat de Codex, escribe",
+        "beforeCommand": "En el chat, escribe",
         "afterCommand": ". Describe la mascota que quieres (una idea, una vibra, algo de tu escritorio). La skill genera automáticamente el spritesheet y las animaciones.",
         "tip": "Tip: lo específico llega más lejos. \"Un duende-calcetín diminuto con ojos verdes\" supera a \"una criatura\"."
       },
       "activate": {
         "title": "Actívala",
-        "beforeSettings": "Reinicia Codex y luego ve a",
+        "beforeSettings": "Reinicia la app y luego ve a",
         "settingsPath": "Settings → Appearance → Pets",
         "middle": "y haz clic en",
         "select": "Select",
@@ -616,20 +633,20 @@
   },
   "about": {
     "metadata": {
-      "title": "Acerca de Petdex: Compañeros animados para Codex",
-      "description": "Petdex es una galería open source de compañeros animados para Codex. Recorre el catálogo, instala con un comando o envía el tuyo.",
+      "title": "Acerca de Petdex: Mascotas animadas para tus agentes de código",
+      "description": "Petdex es una galería open source de mascotas animadas para agentes de código como ChatGPT (Codex), Claude Code, Gemini y OpenCode. Recorre el catálogo, instala con un comando o envía el tuyo.",
       "ogTitle": "Acerca de Petdex",
-      "ogDescription": "Una galería open source de compañeros animados para Codex."
+      "ogDescription": "Una galería open source de mascotas animadas para agentes de código."
     },
     "eyebrow": "Acerca de",
     "hero": {
-      "title": "Petdex es el índice de mascotas de Codex",
-      "body": "Una galería open source de más de {totalPets} compañeros animados para <strong>Codex</strong>. Instala uno con un solo comando y programa con compañía."
+      "title": "Petdex es el índice de mascotas para agentes de código",
+      "body": "Una galería open source de más de {totalPets} mascotas animadas para tus <strong>agentes de código</strong>. Instala una con un solo comando y programa con compañía."
     },
     "sections": {
       "what": {
         "title": "Qué es Petdex",
-        "body1": "Petdex es un registro público y open source. Cada entrada es un paquete de mascota: un pequeño bundle de metadata y pixel art que Codex sabe mostrar mientras trabajas. Piénsalo como una Pokédex de compañeros para la app.",
+        "body1": "Petdex es un registro público y open source. Cada entrada es un paquete de mascota: un pequeño bundle de metadata y pixel art que tu agente de código sabe mostrar mientras trabajas. Piénsalo como una Pokédex de compañeros para la app.",
         "body2": {
           "beforeCozy": "La plataforma te ahorra las dudas: hay un CLI para instalar y enviar, una galería con etiquetas para encontrar el compañero correcto sin scrollear sin fin y colecciones por vibra como",
           "cozyLabel": "mascotas acogedoras",
@@ -642,19 +659,19 @@
         "title": "Cómo funciona un paquete de mascota",
         "beforePetJson": "Cada mascota son dos archivos.",
         "betweenFiles": "define la metadata (nombre, los 9 estados de animación, duraciones de frames) y",
-        "afterSpritesheet": "guarda el pixel art en una tira horizontal. Codex los carga al iniciar y cambia de estado según lo que esté pasando en tu sesión."
+        "afterSpritesheet": "guarda el pixel art en una tira horizontal. Tu agente los carga al iniciar y cambia de estado según lo que esté pasando en tu sesión."
       }
     },
     "faq": {
       "title": "FAQ",
       "items": {
         "whatIs": {
-          "q": "¿Qué es una mascota de Codex?",
-          "a": "Una mascota de Codex es un pequeño compañero animado en pixel art para la app. Cada mascota viene como un solo pet.json que describe 9 estados (idle, working, sleeping, etc.) más un spritesheet horizontal. Codex elige el estado correcto automáticamente según lo que estés haciendo en tu sesión."
+          "q": "¿Qué es una mascota para agentes de código?",
+          "a": "Una mascota es un pequeño compañero animado en pixel art para tu agente de código. Cada mascota viene como un solo pet.json que describe 9 estados (idle, working, sleeping, etc.) más un spritesheet horizontal. Tu agente elige el estado correcto automáticamente según lo que estés haciendo en tu sesión."
         },
         "install": {
           "q": "¿Cómo instalo una mascota?",
-          "a": "Desde la galería o cualquier página de detalle, copia el comando de instalación (se ve como `npx petdex install boba`) y pégalo en tu terminal. El CLI trae la mascota desde R2, la deja en ~/.codex/pets/<slug>/ y le dice a Codex que la use. Funciona en macOS, Linux y Windows (vía PowerShell)."
+          "a": "Desde la galería o cualquier página de detalle, copia el comando de instalación (se ve como `npx petdex install boba`) y pégalo en tu terminal. El CLI trae la mascota desde R2, la deja en ~/.codex/pets/<slug>/ y le dice a tu agente que la use. Funciona en macOS, Linux y Windows (vía PowerShell)."
         },
         "origin": {
           "q": "¿De dónde salen las mascotas?",
@@ -849,7 +866,7 @@
   },
   "installCommand": {
     "installStep": "1. Instalar",
-    "activateStep": "2. Activar en Codex",
+    "activateStep": "2. Activar en la app",
     "dropsInto": "Coloca el paquete del pet en",
     "methodAria": "Método de instalación",
     "platformAria": "Plataforma de instalación",
@@ -860,11 +877,11 @@
       "title": "En Mac, usa Terminal.app",
       "openTerminal": "Abre Spotlight con Command + Space, escribe Terminal y presiona Return.",
       "pasteCommand": "Pega el comando de arriba y presiona Return. Si macOS pide permiso, acéptalo.",
-      "returnToCodex": "Cuando termine, abre Codex Settings, Appearance, Pets y selecciona esta mascota."
+      "returnToCodex": "Cuando termine, abre Settings, Appearance, Pets y selecciona esta mascota."
     },
     "steps": {
-      "openCodex": "Abre Codex,",
-      "insideCodex": "dentro de Codex para activarlo u ocultarlo.",
+      "openCodex": "Abre la app de escritorio de ChatGPT,",
+      "insideCodex": "dentro de la app para activarlo u ocultarlo.",
       "andClick": "y haz clic en",
       "use": "Usa",
       "findPet": "Busca <strong>{displayName}</strong> en"
@@ -885,7 +902,7 @@
     "shareToX": "Compartir en X",
     "shareToLinkedIn": "Compartir en LinkedIn",
     "more": "Más…",
-    "shareText": "Mira la colección de mascotas de Codex de {name} en Petdex"
+    "shareText": "Mira la colección de mascotas de {name} en Petdex"
   },
   "petActions": {
     "moreActions": "Más acciones para {name}",
@@ -1100,6 +1117,11 @@
     "subtitle": "Que esta mascota flote junto a tu agente",
     "opening": "Abriendo Petdex...",
     "ariaLabel": "Abrir {slug} en Petdex Desktop"
+  },
+  "openInCodex": {
+    "label": "Abrir en Codex",
+    "subtitle": "Instala esta mascota en la app de escritorio de ChatGPT",
+    "ariaLabel": "Abrir {displayName} en la app de escritorio de ChatGPT"
   },
   "installCompact": {
     "seeGuide": "Ver guia de instalacion completa",
@@ -1368,102 +1390,102 @@
     "kinds": {
       "creature": {
         "label": "creature",
-        "title": "Codex creature pets",
+        "title": "Animated creature pets for coding agents",
         "intro": "Animals, critters, and made-up beasts. The biggest collection in the index. Most contributors start here: otters, capybaras, foxes, and things with too many legs.",
-        "metaDescription": "Animated creature pets for Codex. Otters, capybaras, foxes and more, installable with one command."
+        "metaDescription": "Animated creature pets for coding agents like ChatGPT (Codex), Claude Code, and Gemini. Otters, capybaras, foxes and more, installable with one command."
       },
       "object": {
         "label": "object",
-        "title": "Codex object pets",
+        "title": "Animated object pets for coding agents",
         "intro": "Pets that aren't alive but absolutely have personality. Paperclips, mugs, ice cream scoops: everyday objects that earned a soul.",
-        "metaDescription": "Codex object pets. Animated pixel companions made from everyday objects."
+        "metaDescription": "Object pets for coding agents. Animated pixel companions made from everyday objects, installable with one command."
       },
       "character": {
         "label": "character",
-        "title": "Codex character pets",
+        "title": "Animated character pets for coding agents",
         "intro": "Humanoids, mascots, fictional figures, original characters, and homages, all in 9-state pixel form.",
-        "metaDescription": "Animated character pets for Codex. Humanoid pixel companions installable with one command."
+        "metaDescription": "Animated character pets for coding agents like ChatGPT (Codex), Claude Code, and Gemini. Humanoid pixel companions installable with one command."
       }
     },
     "vibes": {
       "cozy": {
         "label": "cozy",
-        "title": "Cozy Codex pets",
+        "title": "Cozy pets for coding agents",
         "intro": "Warm, soft companions with gentle poses, subtle blinks, and quiet idle states. Pick one to keep your terminal feeling easy to sit with.",
-        "metaDescription": "Cozy animated pixel pets for Codex. Soft, calming companions you can install with one command."
+        "metaDescription": "Cozy animated pixel pets for coding agents. Soft, calming companions you can install with one command."
       },
       "calm": {
         "label": "calm",
-        "title": "Calm Codex pets",
+        "title": "Calm pets for coding agents",
         "intro": "Steady, low-key companions for focused sessions. Their idle animations breathe instead of bounce.",
-        "metaDescription": "Calm pixel pets for Codex. Low-motion animated companions for deep work."
+        "metaDescription": "Calm pixel pets for coding agents. Low-motion animated companions for deep work."
       },
       "playful": {
         "label": "playful",
-        "title": "Playful Codex pets",
+        "title": "Playful pets for coding agents",
         "intro": "Bouncy companions that refuse to sit still. Expect tail wags, spins, and little interruptions beside your prompt.",
-        "metaDescription": "Playful animated companions for Codex. Bouncy pixel art you can install with one command."
+        "metaDescription": "Playful animated companions for coding agents. Bouncy pixel art you can install with one command."
       },
       "cheerful": {
         "label": "cheerful",
-        "title": "Cheerful Codex pets",
+        "title": "Cheerful pets for coding agents",
         "intro": "The optimists of the index. Bright palettes, smiling sprites, and idle states that seem glad you opened the terminal.",
-        "metaDescription": "Cheerful Codex pets. Bright, smiling animated companions installable with one command."
+        "metaDescription": "Cheerful pets for coding agents. Bright, smiling animated companions installable with one command."
       },
       "focused": {
         "label": "focused",
-        "title": "Focused Codex pets",
+        "title": "Focused pets for coding agents",
         "intro": "Companions in deep work mode. Headphones, monitors, concentrated stares, and ready-to-ship energy.",
-        "metaDescription": "Focused Codex pets. Concentrated, deep-work companions for Codex."
+        "metaDescription": "Focused pets for coding agents. Concentrated, deep-work companions for long sessions."
       },
       "mischievous": {
         "label": "mischievous",
-        "title": "Mischievous Codex pets",
+        "title": "Mischievous pets for coding agents",
         "intro": "Sneaky idle poses, side-eye, and the suspicion that your linter errors might be their fault.",
-        "metaDescription": "Mischievous Codex pets. Sneaky animated pixel companions for your terminal."
+        "metaDescription": "Mischievous pets for coding agents. Sneaky animated pixel companions for your terminal."
       },
       "heroic": {
         "label": "heroic",
-        "title": "Heroic Codex pets",
+        "title": "Heroic pets for coding agents",
         "intro": "Capes, stances, and saving-the-day energy. These pets believe in you and your unmerged PR.",
-        "metaDescription": "Heroic Codex pets. Brave, animated pixel companions installable with one command."
+        "metaDescription": "Heroic pets for coding agents. Brave, animated pixel companions installable with one command."
       },
       "edgy": {
         "label": "edgy",
-        "title": "Edgy Codex pets",
+        "title": "Edgy pets for coding agents",
         "intro": "Darker palettes, sharper silhouettes, and more attitude for terminals that need a little bite.",
-        "metaDescription": "Edgy Codex pets. Bold, animated pixel companions for Codex."
+        "metaDescription": "Edgy pets for coding agents. Bold, animated pixel companions for long sessions."
       },
       "mystical": {
         "label": "mystical",
-        "title": "Mystical Codex pets",
+        "title": "Mystical pets for coding agents",
         "intro": "Moons, sparkles, robes, and the feeling that this companion knows the answer before the model does.",
-        "metaDescription": "Mystical Codex pets. Magical animated pixel companions for Codex."
+        "metaDescription": "Mystical pets for coding agents. Magical animated pixel companions installable with one command."
       },
       "wholesome": {
         "label": "wholesome",
-        "title": "Wholesome Codex pets",
+        "title": "Wholesome pets for coding agents",
         "intro": "Pure-hearted companions with big eyes and small gestures. A little softness for your workspace.",
-        "metaDescription": "Wholesome Codex pets. Sweet animated pixel companions installable with one command."
+        "metaDescription": "Wholesome pets for coding agents. Sweet animated pixel companions installable with one command."
       },
       "chaotic": {
         "label": "chaotic",
-        "title": "Chaotic Codex pets",
+        "title": "Chaotic pets for coding agents",
         "intro": "Maximum energy, minimum predictability. Their states cycle a little strangely, in a good way.",
-        "metaDescription": "Chaotic Codex pets. High-energy animated pixel companions for Codex."
+        "metaDescription": "Chaotic pets for coding agents. High-energy animated pixel companions for long sessions."
       },
       "melancholic": {
         "label": "melancholic",
-        "title": "Melancholic Codex pets",
+        "title": "Melancholic pets for coding agents",
         "intro": "Pensive, soft, and a little wistful. Companions for the part of the night when the build keeps failing.",
-        "metaDescription": "Melancholic Codex pets. Pensive animated pixel companions for Codex."
+        "metaDescription": "Melancholic pets for coding agents. Pensive animated pixel companions installable with one command."
       }
     }
   },
   "docsPage": {
     "metadata": {
       "title": "Docs · Petdex",
-      "description": "How to install, distribute, and automate Codex pets with the Petdex CLI.",
+      "description": "How to install, distribute, and automate pets with the Petdex CLI.",
       "ogTitle": "Petdex CLI · Docs"
     },
     "nav": {
@@ -1486,18 +1508,18 @@
     "hero": {
       "eyebrow": "Petdex CLI · v0.1",
       "title": "Docs",
-      "description": "The Petdex CLI lets you install, browse, and submit Codex pets from your terminal. Authentication uses OAuth 2.0 + PKCE through Clerk, and tokens persist in your OS keychain.",
+      "description": "The Petdex CLI lets you install, browse, and submit pets from your terminal. Authentication uses OAuth 2.0 + PKCE through Clerk, and tokens persist in your OS keychain.",
       "npmCta": "npmjs.com/petdex",
       "repoCta": "Repo"
     },
     "sections": {
       "quickStart": {
         "title": "Inicio rápido",
-        "intro": "Sigue esta lista para instalar una mascota, verla en Codex y conectarla con la app de escritorio. No necesitas una cuenta para instalar. Inicia sesión solo cuando quieras enviar una mascota.",
+        "intro": "Sigue esta lista para instalar una mascota, verla en tu agente y conectarla con la app de escritorio. No necesitas una cuenta para instalar. Inicia sesión solo cuando quieras enviar una mascota.",
         "steps": {
           "install": {
             "title": "Instala una mascota conocida",
-            "body": "Empieza con Boba para tener una carpeta real que puedas seleccionar en Codex.",
+            "body": "Empieza con Boba para tener una carpeta real que puedas seleccionar.",
             "result": "Deberías ver <code>~/.codex/pets/boba/</code> con <code>pet.json</code> y un spritesheet."
           },
           "desktop": {
@@ -1506,9 +1528,9 @@
             "result": "Petdex descarga la app de escritorio, la inicia y conecta los agentes compatibles con <code>/petdex</code>."
           },
           "select": {
-            "title": "Selecciona la mascota en Codex",
-            "body": "Abre Codex, ve a <strong>Settings → Appearance → Pets</strong>, elige <strong>Boba</strong> y haz clic en <strong>Select</strong>.",
-            "result": "Usa <code>/pet</code> dentro de Codex para despertar la mascota o guardarla."
+            "title": "Selecciona la mascota en la app",
+            "body": "Abre la app de escritorio de ChatGPT, ve a <strong>Settings → Appearance → Pets</strong>, elige <strong>Boba</strong> y haz clic en <strong>Select</strong>.",
+            "result": "Usa <code>/pet</code> dentro de la app para despertar la mascota o guardarla."
           },
           "verify": {
             "title": "Verifica la configuración",
@@ -1516,7 +1538,7 @@
             "result": "Doctor informa cualquier binario, hook, token o carpeta de mascota faltante con una corrección concreta."
           }
         },
-        "callout": "¿Aún no tienes una idea de mascota? <link>Crea la tuya</link> con el skill Codex Hatch Pet y vuelve para ejecutar <code>petdex submit</code>."
+        "callout": "¿Aún no tienes una idea de mascota? <link>Crea la tuya</link> con el skill Hatch Pet y vuelve para ejecutar <code>petdex submit</code>."
       },
       "install": {
         "title": "Install",
@@ -1572,8 +1594,8 @@
       },
       "distribute": {
         "title": "Distribute your pets",
-        "intro": "Once you have hatched a pet inside Codex, sharing it takes one command. Here's the full lifecycle:",
-        "create": "<strong>Create.</strong> In Codex Desktop, install the <strong>Hatch Pet</strong> skill and run <code>/pet</code>. Codex generates the spritesheet and pet.json into <code>~/.codex/pets/{petName}/</code>. Full tutorial at <create>/create</create>.",
+        "intro": "Once you have hatched a pet, sharing it takes one command. Here's the full lifecycle:",
+        "create": "<strong>Create.</strong> In the ChatGPT desktop app, install the <strong>Hatch Pet</strong> skill and run <code>/pet</code>. It generates the spritesheet and pet.json into <code>~/.codex/pets/{petName}/</code>. Full tutorial at <create>/create</create>.",
         "signIn": "<strong>Sign in.</strong> <code>npx petdex login</code> if you have not.",
         "submit": "<strong>Submit.</strong> <code>npx petdex submit ~/.codex/pets/{petName}</code>. Or bulk all at once with the parent dir.",
         "review": "<strong>Wait for review.</strong> Submissions land as “pending” in the admin queue. You will receive a Resend email when approved or rejected (if rejected, the reason is included).",
@@ -1628,9 +1650,9 @@
         "title": "Agent-first usage (Skill)",
         "intro": "Petdex ships a Claude Code / Codex / Cursor compatible <strong>skill</strong> at <code>.claude/skills/petdex/SKILL.md</code>. Compatible agents load it automatically and learn <em>when</em> and <em>how</em> to call the CLI on your behalf.",
         "enablesTitle": "What this enables",
-        "enableCozy": "Say <em>“install something cozy for my Codex”</em> in any agent tool. It runs <code>petdex list</code>, suggests Boba/Boxcat, installs your pick, and reminds you to activate via <strong>Settings → Appearance → Pets</strong>.",
+        "enableCozy": "Say <em>“install something cozy for my agent”</em> in any agent tool. It runs <code>petdex list</code>, suggests Boba/Boxcat, installs your pick, and reminds you to activate via <strong>Settings → Appearance → Pets</strong>.",
         "enableShare": "Say <em>“share all my pets”</em>. Agent runs <code>petdex login</code> if needed, then <code>petdex submit ~/.codex/pets</code>, surfaces the bulk summary.",
-        "enableMake": "Say <em>“how do I make my own?”</em>. Agent walks you through Codex Desktop → Hatch Pet skill → <code>/pet</code> → <code>petdex submit</code>.",
+        "enableMake": "Say <em>“how do I make my own?”</em>. Agent walks you through the ChatGPT desktop app → Hatch Pet skill → <code>/pet</code> → <code>petdex submit</code>.",
         "enableTitle": "How to enable it",
         "enableIntro": "If you use Claude Code, save the skill globally so every project has it:",
         "enableOther": "Other agent tools can load the same SKILL.md from the repo. The file is plain markdown. No agent-specific syntax beyond <code>allowed-tools</code>.",

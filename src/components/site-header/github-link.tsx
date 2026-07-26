@@ -12,9 +12,9 @@ export function GithubLink({ item }: GithubLinkProps) {
       target="_blank"
       rel="noreferrer"
       aria-label={item.ariaLabel}
-      className="hidden size-10 place-items-center rounded-full text-muted-2 transition hover:bg-surface-muted hover:text-foreground xl:grid"
+      className="hidden size-9 place-items-center rounded-full border border-border-base bg-surface/70 text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground xl:grid"
     >
-      <GithubIcon className="size-5" />
+      <GithubIcon className="size-[18px]" />
     </a>
   );
 }

@@ -1,12 +1,17 @@
-import { ChevronDownIcon } from "@/components/site-header/chevron-down-icon";
-import { HeaderNavLink } from "@/components/site-header/header-nav-link";
+"use client";
+
+import Link from "next/link";
+
 import type { HeaderNavItem } from "@/components/site-header/types";
-
-const primaryLinkClassName =
-  "inline-flex h-9 items-center rounded-full px-2.5 text-sm font-medium text-muted-2 transition hover:bg-surface-muted hover:text-foreground";
-
-const dropdownLinkClassName =
-  "flex rounded-xl px-3 py-2.5 text-sm font-medium text-foreground transition hover:bg-surface-muted";
+import {
+  NavigationMenu,
+  NavigationMenuContent,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  NavigationMenuList,
+  NavigationMenuTrigger,
+  navigationMenuTriggerStyle,
+} from "@/components/ui/navigation-menu";
 
 type DesktopNavProps = {
   primary: HeaderNavItem[];
@@ -14,33 +19,56 @@ type DesktopNavProps = {
   moreLabel: string;
 };
 
+/**
+ * Three top-level entries instead of eight: Explore folds every
+ * browsing destination into one Base UI navigation menu, while the
+ * two action paths (Download, Docs) stay direct.
+ */
 export function DesktopNav({ primary, secondary, moreLabel }: DesktopNavProps) {
+  const direct = primary.filter(
+    (item) => item.href.endsWith("/download") || item.href.endsWith("/docs"),
+  );
+  const explore = [
+    ...primary.filter((item) => !direct.includes(item)),
+    ...secondary,
+  ];
+
   return (
-    <div className="hidden items-center gap-0.5 xl:flex">
-      {primary.map((item) => (
-        <HeaderNavLink
-          key={item.href}
-          item={item}
-          className={primaryLinkClassName}
-        />
-      ))}
-      {secondary.length > 0 ? (
-        <details className="group relative">
-          <summary className="inline-flex h-9 cursor-pointer list-none items-center gap-1 rounded-full px-2.5 text-sm font-medium text-muted-2 transition hover:bg-surface-muted hover:text-foreground [&::-webkit-details-marker]:hidden">
+    <NavigationMenu className="hidden xl:flex">
+      <NavigationMenuList>
+        <NavigationMenuItem>
+          <NavigationMenuTrigger className="h-8 rounded-full bg-transparent px-2.5 text-[13px] font-medium text-muted-2 hover:text-foreground data-[popup-open]:text-foreground">
             {moreLabel}
-            <ChevronDownIcon />
-          </summary>
-          <div className="absolute top-11 left-0 z-50 w-56 rounded-2xl border border-border-base bg-surface p-2 shadow-xl shadow-blue-950/15">
-            {secondary.map((item) => (
-              <HeaderNavLink
-                key={item.href}
-                item={item}
-                className={dropdownLinkClassName}
-              />
-            ))}
-          </div>
-        </details>
-      ) : null}
-    </div>
+          </NavigationMenuTrigger>
+          <NavigationMenuContent>
+            <ul className="grid w-52 gap-0.5 p-1">
+              {explore.map((item) => (
+                <li key={item.href}>
+                  <NavigationMenuLink
+                    render={<Link href={item.href} prefetch={false} />}
+                    className="flex rounded-lg px-3 py-2 text-[13px] font-medium text-foreground transition hover:bg-brand/10 hover:text-brand"
+                  >
+                    {item.label}
+                  </NavigationMenuLink>
+                </li>
+              ))}
+            </ul>
+          </NavigationMenuContent>
+        </NavigationMenuItem>
+        {direct.map((item) => (
+          <NavigationMenuItem key={item.href}>
+            <NavigationMenuLink
+              render={<Link href={item.href} prefetch={false} />}
+              className={navigationMenuTriggerStyle({
+                className:
+                  "h-8 rounded-full bg-transparent px-2.5 text-[13px] font-medium text-muted-2 hover:text-foreground",
+              })}
+            >
+              {item.label}
+            </NavigationMenuLink>
+          </NavigationMenuItem>
+        ))}
+      </NavigationMenuList>
+    </NavigationMenu>
   );
 }

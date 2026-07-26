@@ -25,7 +25,7 @@ export function PetStateViewer({ src, petName }: PetStateViewerProps) {
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(280px,420px)_1fr]">
-      <section className="rounded-lg border border-border-base bg-surface p-5">
+      <section className="rounded-2xl border border-border-base bg-surface/60 p-4 backdrop-blur">
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-xs font-semibold tracking-[0.18em] text-brand uppercase">
@@ -35,13 +35,13 @@ export function PetStateViewer({ src, petName }: PetStateViewerProps) {
               {t(`states.${activeState.id}.label`)}
             </h2>
           </div>
-          <span className="inline-flex h-9 items-center gap-2 rounded-md bg-surface-muted px-3 text-xs font-medium text-muted-2">
+          <span className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3 text-[12px] font-medium text-muted-2 backdrop-blur">
             <Play className="size-3.5" />
             {t("frames", { count: activeState.frames })}
           </span>
         </div>
 
-        <div className="pet-checkerboard mt-6 flex min-h-80 items-center justify-center rounded-lg border border-border-base">
+        <div className="pet-checkerboard mt-4 flex min-h-64 items-center justify-center rounded-xl border border-border-base">
           <PetSprite
             src={src}
             state={activeState.id}
@@ -53,7 +53,7 @@ export function PetStateViewer({ src, petName }: PetStateViewerProps) {
           />
         </div>
 
-        <p className="mt-4 text-sm leading-6 text-muted-2">
+        <p className="mt-3 text-sm leading-6 text-muted-2">
           {t(`states.${activeState.id}.purpose`)}
         </p>
       </section>
@@ -64,10 +64,10 @@ export function PetStateViewer({ src, petName }: PetStateViewerProps) {
             key={state.id}
             type="button"
             onClick={() => setSelectedState(state.id)}
-            className={`rounded-lg border bg-surface p-4 text-left transition ${
+            className={`rounded-xl border p-4 text-left backdrop-blur transition ${
               selectedState === state.id
-                ? "border-brand ring-2 ring-brand/20"
-                : "border-border-base hover:border-border-strong"
+                ? "border-brand/40 bg-brand/10"
+                : "border-border-base bg-surface/60 hover:bg-surface-muted"
             }`}
           >
             <div className="flex items-start justify-between gap-3">
@@ -79,7 +79,7 @@ export function PetStateViewer({ src, petName }: PetStateViewerProps) {
                   {t("rowFrames", { row: state.row, count: state.frames })}
                 </p>
               </div>
-              <div className="rounded-md border border-border-base bg-surface-muted p-2">
+              <div className="rounded-lg border border-border-base bg-surface-muted p-2">
                 <StaticPetSprite src={src} state={state.id} scale={0.32} />
               </div>
             </div>

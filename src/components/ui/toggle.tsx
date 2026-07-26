@@ -16,7 +16,7 @@ const toggleVariants = cva(
         // active. base-ui Toggle exposes both data-[state=on] and the
         // ARIA aria-pressed attribute, so styling either keeps screen
         // readers and keyboard nav happy.
-        chip: "border border-border-base bg-surface text-muted-2 hover:border-border-strong hover:bg-surface hover:text-foreground aria-pressed:border-inverse aria-pressed:bg-inverse aria-pressed:text-on-inverse aria-pressed:hover:bg-inverse-hover data-[state=on]:border-inverse data-[state=on]:bg-inverse data-[state=on]:text-on-inverse data-[state=on]:hover:bg-inverse-hover",
+        chip: "border border-border-base bg-surface/70 text-muted-2 backdrop-blur hover:bg-surface-muted hover:text-foreground aria-pressed:border-brand/40 aria-pressed:bg-brand/15 aria-pressed:text-brand aria-pressed:hover:bg-brand/20 data-[state=on]:border-brand/40 data-[state=on]:bg-brand/15 data-[state=on]:text-brand data-[state=on]:hover:bg-brand/20",
       },
       size: {
         default:

@@ -245,7 +245,7 @@ export function PetActionMenuContent({
               href={`codex://new?prompt=${encodeURIComponent(`Install this Petdex pet by running: ${installCmd}`)}`}
             />
           }
-          className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2"
+          className="gap-2.5"
         >
           <CodexLogo className="size-4" />
           <span className="flex flex-col">
@@ -258,7 +258,7 @@ export function PetActionMenuContent({
 
         <DropdownMenuItem
           onClick={() => copyText(installCmd, "install")}
-          className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2"
+          className="gap-2.5"
         >
           {copied === "install" ? (
             <Check className="size-4 text-emerald-600" />
@@ -278,7 +278,7 @@ export function PetActionMenuContent({
 
         <DropdownMenuItem
           onClick={() => copyText(pageUrl, "link")}
-          className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2"
+          className="gap-2.5"
         >
           {copied === "link" ? (
             <Check className="size-4 text-emerald-600" />
@@ -296,18 +296,12 @@ export function PetActionMenuContent({
           <Copy className="ml-auto size-3.5 text-stone-300 dark:text-stone-600" />
         </DropdownMenuItem>
 
-        <DropdownMenuItem
-          onClick={onShareX}
-          className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2"
-        >
+        <DropdownMenuItem onClick={onShareX} className="gap-2.5">
           <XIcon className="size-4" />
           <span>{t("shareToX")}</span>
         </DropdownMenuItem>
 
-        <DropdownMenuItem
-          onClick={onShareLinkedIn}
-          className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2"
-        >
+        <DropdownMenuItem onClick={onShareLinkedIn} className="gap-2.5">
           <LinkedInIcon className="size-4" />
           <span>{t("shareToLinkedIn")}</span>
         </DropdownMenuItem>
@@ -315,7 +309,7 @@ export function PetActionMenuContent({
         {typeof navigator !== "undefined" && "share" in navigator ? (
           <DropdownMenuItem
             onClick={() => void onShareNative()}
-            className="flex items-center gap-2.5 px-3 py-2 text-sm text-muted-2"
+            className="gap-2.5"
           >
             <ExternalLink className="size-4" />
             <span>{t("more")}</span>
@@ -336,7 +330,7 @@ export function PetActionMenuContent({
                 />
               }
               onClick={onZipClick}
-              className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-muted-2"
+              className="gap-2.5"
             >
               <Download className="size-4" />
               <span className="flex-1">{t("downloadZip")}</span>
@@ -350,7 +344,7 @@ export function PetActionMenuContent({
             <DropdownMenuItem
               onClick={() => void onWithdraw()}
               disabled={withdrawing}
-              className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-chip-danger-fg"
+              className="gap-2.5 text-chip-danger-fg"
             >
               {withdrawing ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -369,7 +363,7 @@ export function PetActionMenuContent({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               render={<Link href="/submit" prefetch={false} />}
-              className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground"
+              className="gap-2.5 text-foreground"
             >
               <Plus className="size-4" />
               <span className="flex-1">{t("submitNewVersion")}</span>
@@ -382,7 +376,7 @@ export function PetActionMenuContent({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               render={<Link href={`/pets/${pet.slug}#edit`} prefetch={false} />}
-              className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground"
+              className="gap-2.5 text-foreground"
             >
               <Pencil className="size-4" />
               <span className="flex-1">{t("editDetails")}</span>
@@ -397,7 +391,7 @@ export function PetActionMenuContent({
               onClick={() => void onDelete()}
               disabled={deleting}
               variant="destructive"
-              className="flex items-center gap-2.5 px-3 py-2.5 text-sm"
+              className="gap-2.5"
             >
               {deleting ? (
                 <Loader2 className="size-4 animate-spin" />

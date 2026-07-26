@@ -116,12 +116,12 @@ export default async function CollectionPage({ params }: PageProps) {
     <main className="min-h-dvh bg-background text-foreground">
       <JsonLd data={jsonLd} />
       <SiteHeader />
-      <section className="petdex-cloud relative -mt-[84px] overflow-clip pt-[84px]">
+      <section className="petdex-hero relative -mt-14 overflow-clip pt-14">
         <div className="relative mx-auto flex w-full max-w-[1440px] flex-col px-5 pb-12 md:px-8">
           <div className="mt-6">
             <Link
               href="/collections"
-              className="inline-flex h-8 items-center rounded-full border border-border-base bg-surface/70 px-3 text-xs font-medium text-muted-2 transition hover:border-border-strong hover:text-foreground"
+              className="inline-flex h-8 items-center rounded-full border border-border-base bg-surface/70 px-3 text-xs font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
             >
               {t("backToCollections")}
             </Link>
@@ -153,7 +153,7 @@ export default async function CollectionPage({ params }: PageProps) {
                     href={collection.externalUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex h-10 items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-4 text-sm font-medium text-muted-2 transition hover:border-border-strong"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3.5 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
                   >
                     <ExternalLink className="size-4" />
                     Visit IP site
@@ -179,7 +179,7 @@ export default async function CollectionPage({ params }: PageProps) {
               </div>
             </div>
 
-            <div className="pet-sprite-stage relative grid aspect-square place-items-center overflow-hidden rounded-3xl border border-border-base bg-surface/70">
+            <div className="pet-sprite-stage relative grid aspect-square place-items-center overflow-hidden rounded-2xl border border-border-base bg-surface/70">
               {leadPet ? (
                 <PetSprite
                   src={leadPet.spritesheetPath}
@@ -205,7 +205,7 @@ export default async function CollectionPage({ params }: PageProps) {
           </div>
           <Link
             href="/collections"
-            className="inline-flex h-10 items-center rounded-full border border-border-base bg-surface px-4 text-sm font-medium text-muted-2 transition hover:border-border-strong"
+            className="inline-flex h-9 items-center rounded-full border border-border-base bg-surface/70 px-3.5 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
           >
             All collections
           </Link>

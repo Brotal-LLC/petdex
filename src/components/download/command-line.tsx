@@ -179,7 +179,7 @@ export function CommandLine({
         >
           <span className="select-none text-brand">{prefix}</span>
           <span className={commandClass}>{tokenize(command)}</span>
-          <span className="grid size-6 shrink-0 place-items-center rounded-md text-muted-3 transition group-hover:bg-brand-tint group-hover:text-brand-deep">
+          <span className="grid size-6 shrink-0 place-items-center rounded-md text-muted-3 transition group-hover:bg-brand/15 group-hover:text-brand">
             {copied ? (
               <Check className="size-3.5 text-brand-deep" />
             ) : failed ? (
@@ -192,7 +192,7 @@ export function CommandLine({
         <a
           href={`codex://new?prompt=${encodeURIComponent(`Install this Petdex pet by running: ${pinToLatest(command)}`)}`}
           aria-label={t("openInCodexAria")}
-          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-3 transition hover:bg-brand-tint"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-3 transition hover:bg-brand/15"
         >
           <CodexLogo className="size-3.5" />
         </a>
@@ -212,7 +212,7 @@ export function CommandLine({
     >
       <span className="select-none text-brand">{prefix}</span>
       <span className={commandClass}>{tokenize(command)}</span>
-      <span className="grid size-6 shrink-0 place-items-center rounded-md text-muted-3 transition group-hover:bg-brand-tint group-hover:text-brand-deep">
+      <span className="grid size-6 shrink-0 place-items-center rounded-md text-muted-3 transition group-hover:bg-brand/15 group-hover:text-brand">
         {copied ? (
           <Check className="size-3.5 text-brand-deep" />
         ) : failed ? (

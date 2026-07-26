@@ -24,7 +24,7 @@ export function InstallCommandLazy(props: InstallCommandLazyProps) {
 
 function InstallCommandFallback() {
   return (
-    <div className="rounded-2xl border border-border-base bg-surface/80 p-5 shadow-sm shadow-blue-950/5 backdrop-blur">
+    <div className="rounded-2xl border border-border-base bg-surface/60 p-5 backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="h-5 w-32 rounded bg-surface-muted" />
         <div className="h-8 w-28 rounded-full bg-surface-muted" />

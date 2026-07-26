@@ -14,6 +14,7 @@ import { getVariantsFor } from "@/lib/variants";
 import { ClaimCTA } from "@/components/auth/claim-cta";
 import { InstallCommandCompact } from "@/components/download/install-command-compact";
 import { InstallCommandLazy } from "@/components/download/install-command-lazy";
+import { OpenInCodexButton } from "@/components/download/open-in-codex-button";
 import { OpenInPetdexButton } from "@/components/download/open-in-petdex-button";
 import { JsonLd } from "@/components/layout/json-ld";
 import { ReducedMotionHint } from "@/components/onboarding/reduced-motion-hint";
@@ -238,12 +239,12 @@ export default async function PetPage({ params }: PageProps) {
       />
 
       <SiteHeader />
-      {/* Hero — single full-width section with petdex-cloud gradient.
+      {/* Hero — single full-width section on the petdex-hero surface.
           Two-column lockup on lg+: animated sprite (the product) on the
           left, identity + CTAs on the right. Mobile collapses to a
           natural vertical stack: dex nav, sprite, info+CTAs. */}
-      <section className="petdex-cloud relative -mt-[84px] overflow-visible pt-[84px]">
-        <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 pb-8 md:gap-6 md:px-8 md:pb-14">
+      <section className="petdex-hero relative -mt-14 overflow-visible pt-14">
+        <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 pt-5 pb-8 md:gap-6 md:px-8 md:pt-8 md:pb-14">
           {/* Dex nav strip — Pokédex chrome at the top. */}
           <nav
             aria-label={tPet("navigation.ariaLabel")}
@@ -253,7 +254,7 @@ export default async function PetPage({ params }: PageProps) {
             <Link
               href={shuffleHref}
               prefetch={false}
-              className="inline-flex h-10 items-center gap-2 rounded-full border border-border-base bg-surface/80 px-4 text-sm font-medium text-foreground backdrop-blur transition hover:border-border-strong"
+              className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3.5 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
               title={tPet("navigation.shuffleTitle")}
             >
               <Shuffle className="size-4" />
@@ -281,7 +282,7 @@ export default async function PetPage({ params }: PageProps) {
                 Sticky on lg+ so it stays visible while the right
                 column scrolls. */}
             <div className="lg:sticky lg:top-24">
-              <div className="petdex-floater-stage relative h-56 w-full overflow-hidden rounded-3xl sm:h-72 lg:aspect-square lg:h-auto">
+              <div className="petdex-floater-stage pet-sprite-stage relative h-56 w-full overflow-hidden rounded-2xl border border-border-base bg-surface/40 backdrop-blur sm:h-72 lg:aspect-square lg:h-auto">
                 {/* Static fallback for mobile + first paint. Anchored
                     upper-left so the pet reads like a peeking
                     character, not a centered specimen photo. Hidden
@@ -301,7 +302,7 @@ export default async function PetPage({ params }: PageProps) {
                     src={pet.spritesheetPath}
                     petName={pet.displayName}
                     size={180}
-                    initialFraction={{ x: 0.25, y: 0.3 }}
+                    initialFraction={{ x: 0.5, y: 0.5 }}
                   />
                 </span>
               </div>
@@ -309,8 +310,9 @@ export default async function PetPage({ params }: PageProps) {
 
             {/* Right column: identity + CTAs + meta. Order is intentional:
                 eyebrow → name → description → primary CTA (Open in
-                Petdex) → secondary CTA (install command) → quick
-                actions (like/sound/menu + stats) → tags → collections. */}
+                Petdex) → tertiary CTA (Open in Codex) → secondary CTA
+                (install command) → quick actions (like/sound/menu +
+                stats) → tags → collections. */}
             <header className="flex flex-col gap-5">
               <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
                 <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">
@@ -343,6 +345,12 @@ export default async function PetPage({ params }: PageProps) {
 
               <OpenInPetdexButton slug={pet.slug} />
 
+              <OpenInCodexButton
+                displayName={pet.displayName}
+                description={pet.description}
+                spritesheetUrl={pet.spritesheetPath}
+              />
+
               {/* Secondary CTA: single-line npx command + link to the
                   full install guide. The verbose tabs/instructions
                   live under the state viewer so they don't crowd the
@@ -352,30 +360,40 @@ export default async function PetPage({ params }: PageProps) {
                 displayName={pet.displayName}
               />
 
-              {/* Quick actions row + stats. */}
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                <LikeButton slug={pet.slug} />
-                {pet.soundUrl ? (
-                  <PetSoundButton
-                    soundUrl={pet.soundUrl}
-                    displayName={pet.displayName}
-                    labelPrefix="Play signature sound for"
+              {/* Quick actions row: like / sound / share / sticker share
+                  one pill rung. Passive meta (counters) and the rare
+                  action (report) live on a quieter second line so the
+                  row reads as four choices, not seven. */}
+              <div className="flex flex-col gap-2.5 pt-1">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <LikeButton slug={pet.slug} />
+                  {pet.soundUrl ? (
+                    <PetSoundButton
+                      soundUrl={pet.soundUrl}
+                      displayName={pet.displayName}
+                      labelPrefix="Play signature sound for"
+                    />
+                  ) : null}
+                  <PetActionMenu
+                    pet={{
+                      slug: pet.slug,
+                      displayName: pet.displayName,
+                      zipUrl: pet.zipUrl,
+                      description: pet.description,
+                    }}
+                    variant="detail"
                   />
-                ) : null}
-                <PetActionMenu
-                  pet={{
-                    slug: pet.slug,
-                    displayName: pet.displayName,
-                    zipUrl: pet.zipUrl,
-                    description: pet.description,
-                  }}
-                  variant="detail"
-                />
-                <SaveAsSticker slug={pet.slug} displayName={pet.displayName} />
-                <PetTakedownReportButton
-                  pet={{ slug: pet.slug, displayName: pet.displayName }}
-                />
-                <PetCountersBar slug={pet.slug} />
+                  <SaveAsSticker
+                    slug={pet.slug}
+                    displayName={pet.displayName}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <PetCountersBar slug={pet.slug} />
+                  <PetTakedownReportButton
+                    pet={{ slug: pet.slug, displayName: pet.displayName }}
+                  />
+                </div>
               </div>
 
               {/* Tags + collections collapsed into compact metadata. */}
@@ -384,7 +402,7 @@ export default async function PetPage({ params }: PageProps) {
                   {pet.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded-full bg-brand-tint px-2.5 py-1 text-xs font-medium text-brand dark:bg-brand-tint-dark"
+                      className="rounded-full border border-border-base bg-surface/70 px-2.5 py-1 text-[12px] font-medium text-muted-2 backdrop-blur"
                     >
                       {tag}
                     </span>
@@ -403,7 +421,7 @@ export default async function PetPage({ params }: PageProps) {
                       key={col.slug}
                       href={`/collections/${col.slug}`}
                       prefetch={false}
-                      className="rounded-full border border-border-base bg-surface px-2.5 py-1 text-xs font-medium text-muted-2 transition hover:border-border-strong hover:text-foreground"
+                      className="rounded-full border border-border-base bg-surface/70 px-2.5 py-1 text-[12px] font-medium text-muted-2 backdrop-blur transition hover:bg-brand/15 hover:text-brand"
                     >
                       {col.title}
                     </Link>
@@ -436,7 +454,7 @@ export default async function PetPage({ params }: PageProps) {
         </div>
       </section>
 
-      <section className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-5 py-12 md:px-8 md:py-16">
+      <section className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-10 md:gap-8 md:px-8 md:py-12">
         {/* Lets users on Windows / macOS who disabled animations in OS
             settings know the static sprite is intentional, not a bug.
             Reported via feedback on /zh/pets/nyami where the user
@@ -461,61 +479,71 @@ export default async function PetPage({ params }: PageProps) {
           <InstallCommandLazy slug={pet.slug} displayName={pet.displayName} />
         </div>
 
-        {/* Owner credit + claim CTA. Compact row that wraps cleanly on
-            small screens. */}
-        {ownerCredit ? (
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <SubmittedBy credit={ownerCredit} />
-            {ownerCreditResult?.ownerIsProxy ? (
-              <ClaimCTA
-                petName={pet.displayName}
-                authorLabel={ownerCredit.name}
-                githubUrl={
-                  ownerCredit.externals.find((e) => e.provider === "github")
-                    ?.url ?? null
-                }
-              />
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* Stats + variants. Single column when no variants exist (so
-            the radar doesn't sit in a half-empty grid); 2-column when
-            variants are available. */}
+        {/* Credit + stats stack on the left, variants on the right so
+            the short cards share a column instead of each floating in
+            its own full-width band. Single column when no variants. */}
         <div
           className={
-            variants.length > 0 ? "grid gap-6 md:grid-cols-2" : "grid gap-6"
+            variants.length > 0
+              ? "grid items-start gap-6 md:grid-cols-2"
+              : "grid gap-6"
           }
         >
-          <InfoCard
-            title={tPet("stats.title")}
-            icon={<Sparkles className="size-4" />}
-          >
-            <div className="flex items-center justify-center py-2">
-              <PetRadarClient
-                slug={pet.slug}
-                importedAt={pet.importedAt}
-                ariaLabel={tPet("stats.ariaLabel")}
-                labels={{
-                  vibrance: tPet("stats.vibrance"),
-                  popularity: tPet("stats.popularity"),
-                  loved: tPet("stats.loved"),
-                  freshness: tPet("stats.freshness"),
-                }}
-              />
-            </div>
-          </InfoCard>
+          <div className="flex flex-col gap-6">
+            {ownerCredit ? (
+              <div className="flex flex-col gap-3">
+                <SubmittedBy credit={ownerCredit} />
+                {ownerCreditResult?.ownerIsProxy ? (
+                  <ClaimCTA
+                    petName={pet.displayName}
+                    authorLabel={ownerCredit.name}
+                    githubUrl={
+                      ownerCredit.externals.find((e) => e.provider === "github")
+                        ?.url ?? null
+                    }
+                  />
+                ) : null}
+              </div>
+            ) : (
+              <InfoCard
+                title="Submission"
+                icon={<Sparkles className="size-4" />}
+              >
+                <p>Curated entry.</p>
+                <p>Updated {new Date(pet.importedAt).toLocaleDateString()}</p>
+              </InfoCard>
+            )}
+
+            <InfoCard
+              title={tPet("stats.title")}
+              icon={<Sparkles className="size-4" />}
+            >
+              <div className="flex items-center justify-center">
+                <PetRadarClient
+                  slug={pet.slug}
+                  importedAt={pet.importedAt}
+                  ariaLabel={tPet("stats.ariaLabel")}
+                  labels={{
+                    vibrance: tPet("stats.vibrance"),
+                    popularity: tPet("stats.popularity"),
+                    loved: tPet("stats.loved"),
+                    freshness: tPet("stats.freshness"),
+                  }}
+                />
+              </div>
+            </InfoCard>
+          </div>
 
           {variants.length > 0 ? (
-            <section className="rounded-2xl border border-border-base bg-surface/76 p-5 shadow-sm shadow-blue-950/5 backdrop-blur">
+            <section className="rounded-2xl border border-border-base bg-surface/60 p-4 backdrop-blur">
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Sparkles className="size-4" />
                 {tPet("variants.title")}
               </div>
-              <p className="mt-2 text-sm text-muted-2">
+              <p className="mt-1.5 text-[13px] text-muted-2">
                 {tPet("variants.description")}
               </p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
                 {variants.map((variant) => (
                   <Link
                     key={variant.slug}
@@ -544,13 +572,6 @@ export default async function PetPage({ params }: PageProps) {
             </section>
           ) : null}
         </div>
-
-        {!ownerCredit ? (
-          <InfoCard title="Submission" icon={<Sparkles className="size-4" />}>
-            <p>Curated entry.</p>
-            <p>Updated {new Date(pet.importedAt).toLocaleDateString()}</p>
-          </InfoCard>
-        ) : null}
       </section>
 
       <SiteFooter />
@@ -571,13 +592,13 @@ function DexNavPill({
     <Link
       href={`/pets/${pet.slug}`}
       prefetch={false}
-      className={`inline-flex min-h-10 items-center gap-2 rounded-full border border-border-base bg-surface px-4 py-2 text-sm text-foreground transition hover:border-border-strong ${direction === "next" ? "ml-auto" : ""}`}
+      className={`inline-flex h-9 items-center gap-2 rounded-full border border-border-base bg-surface/70 px-3.5 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground ${direction === "next" ? "ml-auto" : ""}`}
     >
       {direction === "prev" ? <span aria-hidden="true">←</span> : null}
-      <span className="font-mono text-xs tracking-[0.16em]">
+      <span className="font-mono text-[11px] tracking-[0.16em] text-muted-3">
         #{formatDexNumber(pet.dexNumber)}
       </span>
-      <span className="font-normal">{pet.displayName}</span>
+      <span>{pet.displayName}</span>
       {direction === "next" ? <span aria-hidden="true">→</span> : null}
     </Link>
   );
@@ -593,12 +614,12 @@ function InfoCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-border-base bg-surface/76 p-5 shadow-sm shadow-blue-950/5 backdrop-blur">
+    <div className="rounded-2xl border border-border-base bg-surface/60 p-4 backdrop-blur">
       <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
         {icon}
         {title}
       </div>
-      <div className="mt-4 space-y-2 break-words text-sm leading-6 text-muted-2">
+      <div className="mt-3 space-y-2 break-words text-sm leading-6 text-muted-2">
         {children}
       </div>
     </div>

@@ -19,7 +19,11 @@ const buttonVariants = cva(
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
         "petdex-cta":
-          "rounded-full bg-inverse text-on-inverse hover:bg-inverse-hover",
+          "btn-3d-brand rounded-full bg-brand-deep font-semibold text-white transition hover:bg-brand dark:text-[#0b0b18]",
+        "petdex-secondary":
+          "rounded-full border border-border-base bg-surface/80 font-medium text-foreground shadow-none backdrop-blur transition hover:border-brand/30 hover:bg-brand/15 hover:text-brand",
+        "petdex-inverse":
+          "btn-3d-inverse rounded-full bg-inverse font-semibold text-on-inverse transition hover:bg-inverse-hover",
         "petdex-pill":
           "rounded-full border border-border-base bg-surface/70 text-muted-2 backdrop-blur hover:bg-surface hover:text-foreground aria-expanded:bg-surface aria-expanded:text-foreground data-popup-open:bg-surface data-popup-open:text-foreground",
       },
@@ -33,7 +37,7 @@ const buttonVariants = cva(
         "icon-xs": "size-6 rounded-none [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-none",
         "icon-lg": "size-9",
-        "petdex-pill": "h-11 px-4 text-sm",
+        "petdex-pill": "h-10 px-4 text-[13px]",
         "petdex-icon": "size-11",
       },
     },

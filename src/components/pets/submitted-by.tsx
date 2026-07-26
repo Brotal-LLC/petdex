@@ -57,7 +57,7 @@ export function SubmittedBy({ credit }: SubmittedByProps) {
   // gets the visual hover treatment but no click handler — every
   // interactive surface is its own focusable child element.
   return (
-    <div className="group rounded-2xl border border-border-base bg-surface/76 p-4 backdrop-blur transition hover:border-border-strong hover:bg-surface">
+    <div className="group rounded-2xl border border-border-base bg-surface/60 p-3.5 backdrop-blur transition hover:bg-surface-muted/60">
       <Link
         href={profileHref}
         prefetch={false}
@@ -95,7 +95,7 @@ export function SubmittedBy({ credit }: SubmittedByProps) {
       </Link>
 
       {displayCredit.externals.length > 0 ? (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border-base pt-3">
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-border-base pt-2.5">
           {displayCredit.externals.map((ext) => (
             // Plain anchor now that we're not nested inside another
             // <a>. target=_blank + rel=noopener mirrors the previous

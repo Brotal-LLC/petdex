@@ -92,16 +92,16 @@ export function PetSoundButton({
       onClick={handleClick}
       aria-label={`${labelPrefix} ${displayName}`}
       title={`${labelPrefix} ${displayName}`}
-      className={`inline-flex h-8 items-center gap-1 rounded-full px-2 transition ${
+      className={`inline-flex size-9 items-center justify-center rounded-full border backdrop-blur transition ${
         playing
-          ? "bg-stone-100 text-stone-900 dark:text-stone-100"
-          : "text-stone-500 hover:bg-surface-muted hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"
+          ? "border-brand/30 bg-brand/15 text-brand"
+          : "border-border-base bg-surface/70 text-muted-2 hover:bg-surface-muted hover:text-foreground"
       }`}
     >
       {busy ? (
-        <Loader2 className="size-3.5 animate-spin" />
+        <Loader2 className="size-4 animate-spin" />
       ) : (
-        <Volume2 className="size-3.5" />
+        <Volume2 className="size-4" />
       )}
     </button>
   );

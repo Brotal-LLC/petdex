@@ -176,8 +176,8 @@ export default async function RequestsPage() {
   return (
     <main className="min-h-dvh bg-background text-foreground">
       <SiteHeader />
-      <section className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-5 pt-8 pb-20 md:px-8">
-        <header className="space-y-3">
+      <section className="petdex-hero relative -mt-14 overflow-clip pt-14">
+        <header className="mx-auto w-full max-w-3xl space-y-3 px-5 pt-10 pb-8 md:px-8 md:pt-14">
           <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">
             {t("eyebrow")}
           </p>
@@ -189,12 +189,13 @@ export default async function RequestsPage() {
           </p>
           <Link
             href="/#gallery"
-            className="inline-flex h-9 items-center rounded-full border border-border-base bg-surface px-4 text-xs font-medium text-muted-2 transition hover:border-border-strong"
+            className="inline-flex h-9 items-center rounded-full border border-border-base bg-surface/70 px-3.5 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
           >
             {t("backToGallery")}
           </Link>
         </header>
-
+      </section>
+      <section className="mx-auto flex w-full max-w-3xl flex-col px-5 pt-6 pb-20 md:px-8">
         <RequestsView initial={initial} />
       </section>
       <SiteFooter />

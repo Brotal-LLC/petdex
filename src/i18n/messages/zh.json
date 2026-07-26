@@ -11,12 +11,15 @@
   },
   "metadata": {
     "root": {
-      "titleDefault": "Petdex: 适用于 Codex 的动画伙伴",
+      "titleDefault": "Petdex：为你的编程智能体准备的动画宠物",
+      "titleDefault__fixme": true,
       "titleTemplate": "%s | Petdex",
-      "description": "Petdex 是 Codex 动画宠物的公开图库。你可以浏览开源宠物、预览动画状态，并用一条命令安装到本地。",
+      "description": "Petdex 是面向编程智能体的公开动画宠物图库，支持 ChatGPT（Codex）、Claude Code、Gemini CLI 和 OpenCode。你可以浏览开源宠物、预览动画状态，并用一条命令安装到本地。",
       "description__fixme": true,
-      "ogTitle": "Petdex: 适用于 Codex 的动画伙伴",
-      "twitterTitle": "Petdex: 适用于 Codex 的动画伙伴",
+      "ogTitle": "Petdex：为你的编程智能体准备的动画宠物",
+      "ogTitle__fixme": true,
+      "twitterTitle": "Petdex：为你的编程智能体准备的动画宠物",
+      "twitterTitle__fixme": true,
       "keywords": {
         "codexPet": "Codex 宠物",
         "codexCliPet": "Codex 宠物",
@@ -26,7 +29,14 @@
         "developerMascot": "开发者吉祥物",
         "terminalPet": "终端宠物",
         "codexCompanion": "Codex 伙伴",
-        "petdex": "petdex"
+        "petdex": "petdex",
+        "chatgptPet": "ChatGPT 宠物",
+        "chatgptDesktopPets": "ChatGPT 桌面应用宠物",
+        "codingAgentPet": "编程智能体宠物",
+        "claudeCodePet": "Claude Code 宠物",
+        "geminiCliPet": "Gemini CLI 宠物",
+        "openCodePet": "OpenCode 宠物",
+        "aiCodingMascot": "AI 编程吉祥物"
       }
     }
   },
@@ -58,7 +68,8 @@
     "vibesDesc": "舒适、酷感、神秘、英雄等风格",
     "build": "创作",
     "buildDesc": "制作并发布你的像素宠物",
-    "createDesc": "用 Codex skill 孵化宠物，从想法到精灵图Sprite 只要几分钟",
+    "createDesc": "用 Hatch Pet 技能孵化宠物，5 分钟从想法到精灵图",
+    "createDesc__fixme": true,
     "submitDesc": "上传文件夹，Petdex 为所有人托管",
     "docsDesc": "安装 Petdex CLI，用 npm 分发宠物",
     "builtWith": "Petdex 案例",
@@ -79,7 +90,8 @@
     "collaborator": "协作者",
     "manageAccount": "管理账号",
     "signOut": "退出登录",
-    "more": "更多"
+    "more": "更多",
+    "explore": "探索"
   },
   "theme": {
     "toggle": "切换主题",
@@ -99,10 +111,10 @@
     "sponsorAria": "在 GitHub 上赞助"
   },
   "home": {
-    "eyebrow": "Codex 宠物索引",
+    "eyebrow": "编程智能体宠物索引",
     "eyebrow__fixme": true,
     "title": "Petdex",
-    "tagline": "<brand>Codex</brand> 的公共动画宠物图库。浏览 {totalPets}+ 个开源伙伴，预览它们的动画状态，并用一条命令安装。",
+    "tagline": "面向<brand>编程智能体</brand>的公共动画宠物图库。浏览 {totalPets}+ 个开源伙伴，预览它们的动画状态，并用一条命令安装。",
     "tagline__fixme": true,
     "heroCommand": "npx petdex install boba",
     "downloadCta": "下载 Petdex Desktop",
@@ -133,16 +145,17 @@
       "spriteAlt": "{name} 惊喜宠物",
       "spriteAlt__fixme": true
     },
-    "jsonLdDescription": "Codex 动画宠物的公共图库。一条命令即可安装。",
+    "jsonLdDescription": "面向 ChatGPT（Codex）、Claude Code、Gemini 和 OpenCode 等编程智能体的公开动画宠物图库。用一条命令即可安装。",
     "jsonLdDescription__fixme": true,
-    "jsonLdFeaturedPets": "精选 Codex 宠物",
+    "jsonLdFeaturedPets": "精选编程智能体宠物",
     "jsonLdFeaturedPets__fixme": true,
     "featuredCollections": {
       "eyebrow": "精选合集",
       "title": "值得安装的精选合集",
       "viewAll": "查看全部",
       "petsCount": "{count} 个宠物"
-    }
+    },
+    "worksWith": "支持"
   },
   "community": {
     "metadata": {
@@ -239,14 +252,14 @@
   "submit": {
     "metadata": {
       "title": "提交宠物 | Petdex",
-      "description": "为 Petdex 上传并验证一个 Codex 宠物包。",
+      "description": "为 Petdex 上传并校验宠物包。",
       "description__fixme": true
     },
     "eyebrow": "提交",
     "title": "把你的宠物加入 Petdex",
-    "body": "分享一个兼容 Codex 的动画宠物包。Petdex 会在本地检查文件、预览精灵图Sprite，并准备提交。",
+    "body": "分享一个动画宠物包。Petdex 会在本地校验文件、预览精灵图并准备提交。",
     "body__fixme": true,
-    "createCta": "还没有宠物？去 Codex 里孵化一只",
+    "createCta": "还没有宠物？现在孵化一只",
     "createCta__fixme": true,
     "legalPrefix": "提交即表示你确认自己拥有该作品的权利，或这是你创作的同人内容。不允许美化战争、仇恨或军国主义符号的内容，此类内容将被移除。权利人可以通过我们的",
     "legalPrefix__fixme": true,
@@ -259,7 +272,8 @@
         "short": "拖入包含 pet.json 和精灵图集 Spritesheet 的文件夹或 ZIP。",
         "ariaLabel": "宠物包拖放区域",
         "pickFolder": "选择文件夹",
-        "pickZip": "选择 .zip"
+        "pickZip": "选择 .zip",
+        "pickSpritesheet": "选择精灵图集"
       },
       "auth": {
         "signIn": "登录后提交"
@@ -269,6 +283,12 @@
         "reading": "正在读取包...",
         "ready": "可以提交了。",
         "empty": "在你确认前，包会一直保留在本地。Petdex 会在上传前检查 manifest 和精灵图Sprite 尺寸。"
+      },
+      "edit": {
+        "displayNameLabel": "宠物名称",
+        "displayNamePlaceholder": "输入宠物名称",
+        "descriptionLabel": "描述",
+        "descriptionPlaceholder": "输入简短描述"
       },
       "path": {
         "prefix": "宠物资源位于",
@@ -315,7 +335,8 @@
       "defaults": {
         "missingFiles": "缺少文件",
         "untitledPet": "未命名宠物",
-        "description": "一个兼容 Codex 的数字宠物。"
+        "description": "一只面向编程智能体的动画数字宠物。",
+        "description__fixme": true
       },
       "errors": {
         "uploadFailed": "上传失败：{reason}",
@@ -339,7 +360,8 @@
         "invalidJson": "pet.json 不是有效的 JSON。",
         "unreadableSpritesheet": "无法读取精灵图集 Spritesheet 图片。",
         "tooSmall": "精灵图集 Spritesheet 看起来太小（{width}×{height}）。请使用 8×9 帧网格（推荐 {recommendedWidth}×{recommendedHeight}）。",
-        "badGrid": "精灵图集 Spritesheet 网格为 {width}×{height}，不符合 8×9（1536×1872）或 v2 8×11（1536×2288）帧网格，帧会错位显示。"
+        "badGrid": "精灵图集 Spritesheet 网格为 {width}×{height}，不符合 8×9（1536×1872）或 v2 8×11（1536×2288）帧网格，帧会错位显示。",
+        "spritesheetMissingPetInfo": "此精灵图集旁未找到 pet.json，已生成占位名称/描述。请在下方填写宠物名称和描述后再提交。"
       }
     }
   },
@@ -455,26 +477,27 @@
     "metadata": {
       "title": "创建一只宠物 | Petdex",
       "title__fixme": true,
-      "description": "5 分钟孵化你自己的 Codex 宠物，然后把它分享到 Petdex。",
+      "description": "5 分钟孵化属于你的动画宠物，然后分享到 Petdex。",
       "description__fixme": true
     },
     "eyebrow": "自己做一只",
     "eyebrow__fixme": true,
-    "title": "在 Codex 里孵化一只宠物",
+    "title": "孵化一只宠物",
     "title__fixme": true,
-    "body": "Codex 内置了一项名为 <strong>Hatch Pet</strong> 的技能，只需一段简短描述，就能生成一个完整动画伙伴（9 个状态，1536×1872）。从想法到住进应用里的精灵图Sprite，只要五分钟。",
+    "body": "ChatGPT 桌面应用内置了名为 <strong>Hatch Pet</strong> 的技能，可以根据一段简短描述生成完整的动画宠物（9 个状态，1536×1872）。五分钟就能从想法变成活在应用里的精灵图。",
     "body__fixme": true,
     "steps": {
       "install": {
         "title": "安装 Hatch Pet 技能",
         "title__fixme": true,
-        "body": "打开 Codex → 顶部导航里的 <skills>Skills</skills> → 找到 <strong>Hatch Pet</strong> → 安装。",
+        "body": "打开 ChatGPT 桌面应用 → 顶部导航栏的 <skills>Skills</skills> → 找到 <strong>Hatch Pet</strong> → 安装。",
         "body__fixme": true
       },
       "hatch": {
         "title": "孵化你的宠物",
         "title__fixme": true,
-        "beforeCommand": "在 Codex 聊天里输入",
+        "beforeCommand": "在聊天框中输入",
+        "beforeCommand__fixme": true,
         "afterCommand": "。描述你想要的宠物（一种想法、一种氛围、桌上的某个东西）。技能会自动生成精灵图集 Spritesheet 和动画。",
         "afterCommand__fixme": true,
         "tip": "提示：越具体越好。“有绿色眼睛的小袜子精灵”比“一只动物”更有效。",
@@ -483,7 +506,8 @@
       "activate": {
         "title": "启用它",
         "title__fixme": true,
-        "beforeSettings": "重启 Codex，然后进入",
+        "beforeSettings": "重启应用，然后前往",
+        "beforeSettings__fixme": true,
         "settingsPath": "Settings → Appearance → Pets",
         "middle": "并点击",
         "select": "Select",
@@ -749,26 +773,26 @@
   },
   "about": {
     "metadata": {
-      "title": "关于 Petdex：Codex 的宠物库",
+      "title": "关于 Petdex：为你的编程智能体准备的动画宠物",
       "title__fixme": true,
-      "description": "Petdex 是面向 Codex 的开源数字宠物库。你可以浏览宠物、用一条命令安装，也可以提交自己的作品。",
+      "description": "Petdex 是面向 ChatGPT（Codex）、Claude Code、Gemini 和 OpenCode 等编程智能体的开源动画宠物图库。浏览目录、用一条命令安装，或提交你自己的作品。",
       "description__fixme": true,
       "ogTitle": "关于 Petdex",
-      "ogDescription": "面向 Codex 的开源数字宠物库。",
+      "ogDescription": "面向编程智能体的开源动画宠物图库。",
       "ogDescription__fixme": true
     },
     "eyebrow": "关于",
     "hero": {
-      "title": "Petdex 是 Codex 的宠物库",
+      "title": "Petdex 是编程智能体的宠物库",
       "title__fixme": true,
-      "body": "面向 <strong>Codex</strong> 的开源数字宠物库，收录了 {totalPets}+ 只宠物。复制一条命令就能安装，让宠物陪你一起工作。",
+      "body": "面向你的<strong>编程智能体</strong>的开源数字宠物库，收录了 {totalPets}+ 只宠物。复制一条命令就能安装，让宠物陪你一起工作。",
       "body__fixme": true
     },
     "sections": {
       "what": {
         "title": "Petdex 是什么",
         "title__fixme": true,
-        "body1": "Petdex 是一个公开、开源的宠物库。每条记录都是一个宠物包：包含元数据和像素图，Codex 会在你工作时显示对应动画。你可以把它理解成 Codex 宠物版的宝可梦图鉴。",
+        "body1": "Petdex 是一个公开的开源登记库。每一条记录都是一个宠物包：一小捆元数据和像素图，你的编程智能体知道如何在你工作时把它显示出来。可以把它理解成应用伙伴的图鉴。",
         "body1__fixme": true,
         "body2": {
           "beforeCozy": "Petdex 把安装、提交和筛选流程都整理好了：CLI 负责安装和提交，带标签的图库方便你快速找到合适的宠物，也可以按风格浏览，比如",
@@ -789,7 +813,7 @@
         "beforePetJson__fixme": true,
         "betweenFiles": "定义元数据：名称、9 个动画状态和帧时长；而",
         "betweenFiles__fixme": true,
-        "afterSpritesheet": "保存横向排列的精灵图集 Spritesheet。Codex 会在启动时加载它们，并根据你当前会话里的情况切换状态。",
+        "afterSpritesheet": "以横向条带保存像素图。你的智能体会在启动时加载它们，并根据会话中正在发生的事情切换状态。",
         "afterSpritesheet__fixme": true
       }
     },
@@ -798,15 +822,15 @@
       "title__fixme": true,
       "items": {
         "whatIs": {
-          "q": "Codex 宠物是什么？",
+          "q": "什么是编程智能体宠物？",
           "q__fixme": true,
-          "a": "Codex 宠物是在 Codex 里显示的小型动画像素宠物。每只宠物都包含一个 pet.json，用来描述 9 个状态（idle、working、sleeping 等），再加上一张横向精灵图集 Spritesheet。Codex 会根据你在当前会话里的操作自动选择合适的状态。",
+          "a": "宠物是陪伴你编程智能体的小型像素动画伙伴。每只宠物都由一个 pet.json 描述 9 个状态（idle、working、sleeping 等），外加一张横向精灵图。你的智能体会根据你在会话中的操作自动选择合适的状态。",
           "a__fixme": true
         },
         "install": {
           "q": "我该怎么安装宠物？",
           "q__fixme": true,
-          "a": "在图库页或任意宠物详情页复制安装命令（形如 `npx petdex install boba`），然后粘贴到终端。CLI 会从 R2 拉取宠物，放到 ~/.codex/pets/<宠物名>/ 下，并告诉 Codex 使用它。支持 macOS、Linux 和 Windows（通过 PowerShell）。",
+          "a": "在图库页面或任意宠物详情页复制安装命令（形如 `npx petdex install boba`），粘贴到终端即可。CLI 会从 R2 拉取宠物，放到 ~/.codex/pets/<slug>/，并让你的智能体使用它。支持 macOS、Linux 和 Windows（通过 PowerShell）。",
           "a__fixme": true
         },
         "origin": {
@@ -1028,7 +1052,8 @@
   },
   "installCommand": {
     "installStep": "1. 安装",
-    "activateStep": "2. 在 Codex 中激活",
+    "activateStep": "2. 在应用中激活",
+    "activateStep__fixme": true,
     "dropsInto": "将宠物包放入",
     "methodAria": "安装方式",
     "platformAria": "安装平台",
@@ -1039,11 +1064,14 @@
       "title": "在 Mac 上使用 Terminal.app",
       "openTerminal": "按 Command + Space 打开 Spotlight，输入 Terminal，然后按 Return。",
       "pasteCommand": "粘贴上方命令并按 Return。如果 macOS 请求权限，请允许。",
-      "returnToCodex": "完成后打开 Codex Settings、Appearance、Pets，然后选择这只宠物。"
+      "returnToCodex": "完成后，打开 Settings、Appearance、Pets，然后选择这只宠物。",
+      "returnToCodex__fixme": true
     },
     "steps": {
-      "openCodex": "打开 Codex，",
-      "insideCodex": "在 Codex 中唤醒它或将其收起。",
+      "openCodex": "打开 ChatGPT 桌面应用，",
+      "openCodex__fixme": true,
+      "insideCodex": "在应用内唤醒或收起它。",
+      "insideCodex__fixme": true,
       "andClick": "并点击",
       "use": "使用",
       "findPet": "在 <strong>{displayName}</strong> 下查找"
@@ -1064,7 +1092,8 @@
     "shareToX": "分享到 X",
     "shareToLinkedIn": "分享到 LinkedIn",
     "more": "更多…",
-    "shareText": "看看 {name} 在 Petdex 上的 Codex 宠物合集"
+    "shareText": "来看看 {name} 在 Petdex 上的宠物收藏",
+    "shareText__fixme": true
   },
   "petActions": {
     "moreActions": "{name} 的更多操作",
@@ -1348,6 +1377,14 @@
     "ariaLabel": "在 Petdex Desktop 中打开 {slug}",
     "ariaLabel__fixme": true
   },
+  "openInCodex": {
+    "label": "在 Codex 中打开",
+    "label__fixme": true,
+    "subtitle": "在 ChatGPT 桌面应用中安装这只宠物",
+    "subtitle__fixme": true,
+    "ariaLabel": "在 ChatGPT 桌面应用中打开 {displayName}",
+    "ariaLabel__fixme": true
+  },
   "installCompact": {
     "seeGuide": "查看完整安装指南",
     "seeGuide__fixme": true,
@@ -1616,102 +1653,133 @@
     "kinds": {
       "creature": {
         "label": "动物",
-        "title": "Codex 动物类宠物",
+        "title": "面向编程智能体的动物类动画宠物",
+        "title__fixme": true,
         "intro": "动物、小怪兽和各种想象出来的小伙伴都在这里。这是 Petdex 里最大的类别，也是很多创作者的起点：水獭、水豚、狐狸，还有一些说不上名字但很有生命力的小东西。",
-        "metaDescription": "Codex 动物类动画像素宠物：水獭、水豚、狐狸等，一条命令即可安装。"
+        "metaDescription": "面向 ChatGPT（Codex）、Claude Code 和 Gemini 等编程智能体的动物类动画宠物。水獭、水豚、狐狸等，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "object": {
         "label": "物品",
-        "title": "Codex 物品类宠物",
+        "title": "面向编程智能体的物件类动画宠物",
+        "title__fixme": true,
         "intro": "它们不一定是活物，但绝对有性格。回形针、马克杯、冰淇淋球，一些日常物品被画成像素宠物之后，突然就有了陪你写代码的气质。",
-        "metaDescription": "Codex 物品类像素宠物，把日常物品变成可以安装的动画伙伴。"
+        "metaDescription": "面向编程智能体的物件类宠物。由日常物件做成的像素动画伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "character": {
         "label": "角色",
-        "title": "Codex 角色类宠物",
+        "title": "面向编程智能体的角色类动画宠物",
+        "title__fixme": true,
         "intro": "人形角色、吉祥物、原创人物和致敬作品都放在这里。每只宠物都被整理成 Codex 可用的 9 种动画状态。",
-        "metaDescription": "Codex 角色类动画像素宠物，包含人形角色、吉祥物和原创人物。"
+        "metaDescription": "面向 ChatGPT（Codex）、Claude Code 和 Gemini 等编程智能体的角色类动画宠物。人形像素伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       }
     },
     "vibes": {
       "cozy": {
         "label": "舒适",
-        "title": "舒适系 Codex 宠物",
+        "title": "面向编程智能体的舒适系宠物",
+        "title__fixme": true,
         "intro": "温柔、不抢戏，像给终端铺了一条小毯子。柔和的姿势、轻轻眨眼、安静待机，适合长时间写代码时放在旁边。",
-        "metaDescription": "舒适系 Codex 动画像素宠物，柔和安静，一条命令即可安装。"
+        "metaDescription": "面向编程智能体的舒适系像素动画宠物。柔和、让人平静的伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "calm": {
         "label": "平静",
-        "title": "平静系 Codex 宠物",
+        "title": "面向编程智能体的平静系宠物",
+        "title__fixme": true,
         "intro": "适合专注时段的低调伙伴。动画节奏更像呼吸，不会在你调试半天的时候跳出来抢注意力。",
-        "metaDescription": "平静系 Codex 像素宠物，适合深度工作的低干扰动画伙伴。"
+        "metaDescription": "面向编程智能体的平静系像素宠物。低动态的动画伙伴，适合深度工作。",
+        "metaDescription__fixme": true
       },
       "playful": {
         "label": "俏皮",
-        "title": "俏皮系 Codex 宠物",
+        "title": "面向编程智能体的顽皮系宠物",
+        "title__fixme": true,
         "intro": "活泼、淘气、坐不住。它们会摇尾巴、转圈，偶尔像是在提示词旁边插一句嘴。",
-        "metaDescription": "俏皮的 Codex 动画伙伴。一条命令即可安装的活泼像素宠物。"
+        "metaDescription": "面向编程智能体的顽皮系动画伙伴。活蹦乱跳的像素画，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "cheerful": {
         "label": "开朗",
-        "title": "开朗系 Codex 宠物",
+        "title": "面向编程智能体的欢快系宠物",
+        "title__fixme": true,
         "intro": "Petdex 里的乐观派。配色明亮、表情轻快，待机时也像是在认真欢迎你打开终端。",
-        "metaDescription": "开朗的 Codex 宠物。明亮、带笑、一条命令即可安装。"
+        "metaDescription": "面向编程智能体的欢快系宠物。明亮、爱笑的动画伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "focused": {
         "label": "专注",
-        "title": "专注系 Codex 宠物",
+        "title": "面向编程智能体的专注系宠物",
+        "title__fixme": true,
         "intro": "已经进入深度工作模式的伙伴。耳机、显示器、认真凝视，感觉下一秒就要和你一起把这个功能发出去。",
-        "metaDescription": "专注系 Codex 宠物。适合深度工作的专注伙伴。"
+        "metaDescription": "面向编程智能体的专注系宠物。适合长时间深度工作的伙伴。",
+        "metaDescription__fixme": true
       },
       "mischievous": {
         "label": "淘气",
-        "title": "淘气系 Codex 宠物",
+        "title": "面向编程智能体的调皮系宠物",
+        "title__fixme": true,
         "intro": "带一点坏笑和小心思。偷偷摸摸的待机姿势、斜眼表情，让人怀疑刚才那个 linter 报错是不是它干的。",
-        "metaDescription": "淘气的 Codex 宠物。适合终端的狡黠动画像素伙伴。"
+        "metaDescription": "面向编程智能体的调皮系宠物。适合终端的鬼灵精怪像素动画伙伴。",
+        "metaDescription__fixme": true
       },
       "heroic": {
         "label": "英雄",
-        "title": "英雄系 Codex 宠物",
+        "title": "面向编程智能体的英雄系宠物",
+        "title__fixme": true,
         "intro": "披风、站姿和一点拯救世界的气场。它们相信你，也相信你那个还没合并的 PR。",
-        "metaDescription": "英雄系 Codex 宠物。勇敢的动画像素伙伴，一条命令即可安装。"
+        "metaDescription": "面向编程智能体的英雄系宠物。勇敢的像素动画伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "edgy": {
         "label": "酷感",
-        "title": "酷感 Codex 宠物",
+        "title": "面向编程智能体的酷炫系宠物",
+        "title__fixme": true,
         "intro": "配色更深，轮廓更利落，态度也更明显。适合想让终端多一点锋芒的时候。",
-        "metaDescription": "酷感 Codex 宠物。大胆的动画像素伙伴。"
+        "metaDescription": "面向编程智能体的酷炫系宠物。大胆的像素动画伙伴，适合长时间会话。",
+        "metaDescription__fixme": true
       },
       "mystical": {
         "label": "神秘",
-        "title": "神秘系 Codex 宠物",
+        "title": "面向编程智能体的神秘系宠物",
+        "title__fixme": true,
         "intro": "月亮、星光、长袍和一点神秘感。像是还没等模型回答，它就已经知道答案了。",
-        "metaDescription": "神秘系 Codex 宠物。适用于 Codex 的魔法感动画像素伙伴。"
+        "metaDescription": "面向编程智能体的神秘系宠物。充满魔法感的像素动画伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "wholesome": {
         "label": "治愈",
-        "title": "治愈系 Codex 宠物",
+        "title": "面向编程智能体的治愈系宠物",
+        "title__fixme": true,
         "intro": "真诚、温柔，很难不喜欢。大眼睛和小动作都刚刚好，适合给工作区加一点软乎乎的善意。",
-        "metaDescription": "治愈系 Codex 宠物。甜而不腻的动画像素伙伴，一条命令即可安装。"
+        "metaDescription": "面向编程智能体的治愈系宠物。甜甜的像素动画伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       },
       "chaotic": {
         "label": "混乱",
-        "title": "混乱系 Codex 宠物",
+        "title": "面向编程智能体的混乱系宠物",
+        "title__fixme": true,
         "intro": "能量很满，也不太可预测。动画状态有点不按常理出牌，但这种不对劲刚刚好。",
-        "metaDescription": "混乱系 Codex 宠物。高能动画像素伙伴。"
+        "metaDescription": "面向编程智能体的混乱系宠物。高能量的像素动画伙伴，适合长时间会话。",
+        "metaDescription__fixme": true
       },
       "melancholic": {
         "label": "忧郁",
-        "title": "忧郁系 Codex 宠物",
+        "title": "面向编程智能体的忧郁系宠物",
+        "title__fixme": true,
         "intro": "安静、柔软，带一点怅然。适合夜深了、构建还在失败、你还不想关掉终端的时候。",
-        "metaDescription": "忧郁系 Codex 宠物。适合 Codex 的沉思动画像素伙伴。"
+        "metaDescription": "面向编程智能体的忧郁系宠物。若有所思的像素动画伙伴，一条命令即可安装。",
+        "metaDescription__fixme": true
       }
     }
   },
   "docsPage": {
     "metadata": {
       "title": "文档 · Petdex",
-      "description": "用 Petdex CLI 安装、提交和分发 Codex 宠物。",
+      "description": "如何用 Petdex CLI 安装、分发并自动化你的宠物。",
+      "description__fixme": true,
       "ogTitle": "Petdex CLI · 文档"
     },
     "nav": {
@@ -1734,18 +1802,21 @@
     "hero": {
       "eyebrow": "Petdex CLI · v0.1",
       "title": "文档",
-      "description": "Petdex CLI 可以直接在终端里安装、浏览和提交 Codex 宠物。登录走 Clerk 的 OAuth 2.0 + PKCE，token 会保存在系统钥匙串里。",
+      "description": "Petdex CLI 让你在终端里安装、浏览并提交宠物。认证通过 Clerk 走 OAuth 2.0 + PKCE，令牌保存在系统钥匙串中。",
+      "description__fixme": true,
       "npmCta": "npmjs.com/petdex",
       "repoCta": "仓库"
     },
     "sections": {
       "quickStart": {
         "title": "快速开始",
-        "intro": "按这份清单走完，就能把宠物装好、在 Codex 里看到它，并接上桌面应用。安装不需要账号，只有提交作品时才需要登录。",
+        "intro": "按这份清单走完，就能把宠物装好、在你的智能体里看到它，并接上桌面应用。安装不需要账号，只有提交作品时才需要登录。",
+        "intro__fixme": true,
         "steps": {
           "install": {
             "title": "先安装一只已知宠物",
-            "body": "建议先用 Boba，这样 Codex 里一定有一个可以选择的宠物目录。",
+            "body": "先从 Boba 开始，这样你就有一个真实的宠物文件夹可以选择。",
+            "body__fixme": true,
             "result": "你应该能看到 <code>~/.codex/pets/boba/</code>，里面包含 <code>pet.json</code> 和 spritesheet。"
           },
           "desktop": {
@@ -1754,9 +1825,12 @@
             "result": "Petdex 会下载并启动桌面应用，同时给支持的 agent 接上 <code>/petdex</code>。"
           },
           "select": {
-            "title": "在 Codex 里选择宠物",
-            "body": "打开 Codex，进入 <strong>Settings → Appearance → Pets</strong>，选择 <strong>Boba</strong>，然后点击 <strong>Select</strong>。",
-            "result": "在 Codex 里使用 <code>/pet</code> 可以唤醒宠物，也可以把它收起来。"
+            "title": "在应用中选择宠物",
+            "title__fixme": true,
+            "body": "打开 ChatGPT 桌面应用，前往 <strong>Settings → Appearance → Pets</strong>，选择 <strong>Boba</strong>，然后点击 <strong>Select</strong>。",
+            "body__fixme": true,
+            "result": "在应用内使用 <code>/pet</code> 唤醒宠物或把它收起来。",
+            "result__fixme": true
           },
           "verify": {
             "title": "验证配置是否正常",
@@ -1764,7 +1838,8 @@
             "result": "doctor 会指出缺失的 binary、hook、token 或宠物目录，并给出具体修复提示。"
           }
         },
-        "callout": "还没有宠物点子？先用 Codex Hatch Pet skill <link>孵化一只</link>，再回来运行 <code>petdex submit</code>。"
+        "callout": "还没有宠物点子？用 Hatch Pet 技能<link>孵化你自己的</link>，然后回来运行 <code>petdex submit</code>。",
+        "callout__fixme": true
       },
       "install": {
         "title": "安装",
@@ -1820,12 +1895,15 @@
       },
       "distribute": {
         "title": "分享上架你的宠物",
-        "intro": "在 Codex 里孵化好宠物之后，一条命令就能分享出去。完整流程如下：",
-        "create": "<strong>创建。</strong>在 Codex Desktop 里安装 <strong>Hatch Pet</strong> skill，然后运行 <code>/pet</code>。Codex 会把精灵图集 Spritesheet 和 pet.json 生成到 <code>~/.codex/pets/{petName}/</code>。完整教程见 <create>/create</create>。",
+        "intro": "宠物孵化出来之后，只要一条命令就能分享。完整流程如下：",
+        "intro__fixme": true,
+        "create": "<strong>创建。</strong>在 ChatGPT 桌面应用中安装 <strong>Hatch Pet</strong> 技能并运行 <code>/pet</code>。它会把精灵图和 pet.json 生成到 <code>~/.codex/pets/{petName}/</code>。完整教程见 <create>/create</create>。",
+        "create__fixme": true,
         "signIn": "<strong>登录。</strong>如果还没登录，先运行 <code>npx petdex login</code>。",
         "submit": "<strong>提交。</strong><code>npx petdex submit ~/.codex/pets/{petName}</code>。也可以直接提交父目录来批量提交。",
         "review": "<strong>等待审核。</strong>提交会进入 admin queue，状态为“pending”。通过或拒绝后你会收到 Resend 邮件；如果被拒绝，邮件里会包含原因。",
-        "install": "<strong>任何人都能安装你的宠物。</strong>审核通过后，把 <code>npx petdex install {yourPetName}</code> 分享给别人即可。对方会立刻把宠物安装到自己的 <code>~/.codex/pets/</code>。",
+        "install": "<strong>任何人都能安装你的宠物。</strong>审核通过后，把 <code>npx petdex install {yourPetName}</code> 分享给别人。他们的 <code>~/.codex/pets/</code> 里会立刻出现你的宠物。",
+        "install__fixme": true,
         "callout": "Petdex 上的宠物由用户提交，可能包含同人创作内容。Petdex 不会对任何第三方底层知识产权主张权属、所有权或相关权益。如果你是权利人或授权代表，希望申请下架，请查看 <takedown>/legal/takedown</takedown>。"
       },
       "validation": {
@@ -1876,9 +1954,11 @@
         "title": "适用于 Agent 的用法（Skill）",
         "intro": "Petdex 提供兼容 Claude Code / Codex / Cursor 的 <strong>skill</strong>：<code>.claude/skills/petdex/SKILL.md</code>。兼容的 Agent 会自动加载它，并学会在什么场景、用什么方式替你调用 CLI。",
         "enablesTitle": "它能做什么",
-        "enableCozy": "你可以在任意 Agent 工具里说 <em>“给我的 Codex 装一个舒服点的宠物”</em>。它会运行 <code>petdex list</code>，推荐 Boba/Boxcat，安装你选中的宠物，并提醒你到 <strong>Settings → Appearance → Pets</strong> 启用。",
+        "enableCozy": "在任意智能体工具里说<em>“给我的智能体装个舒适系的”</em>。它会运行 <code>petdex list</code>，推荐 Boba/Boxcat，安装你选的那只，并提醒你通过 <strong>Settings → Appearance → Pets</strong> 激活。",
+        "enableCozy__fixme": true,
         "enableShare": "你可以说 <em>“把我的所有宠物分享出去”</em>。Agent 会在需要时运行 <code>petdex login</code>，再执行 <code>petdex submit ~/.codex/pets</code>，最后展示批量提交摘要。",
-        "enableMake": "你可以问 <em>“我怎么做自己的宠物？”</em>。Agent 会带你走完整流程：Codex Desktop → Hatch Pet skill → <code>/pet</code> → <code>petdex submit</code>。",
+        "enableMake": "说<em>“我要怎么做自己的？”</em>。智能体会带你走完 ChatGPT 桌面应用 → Hatch Pet 技能 → <code>/pet</code> → <code>petdex submit</code>。",
+        "enableMake__fixme": true,
         "enableTitle": "如何启用",
         "enableIntro": "如果你使用 Claude Code，可以把这个 skill 保存到全局，让每个项目都能使用：",
         "enableOther": "其它 Agent 工具也可以从仓库加载同一个 SKILL.md。这个文件是普通 Markdown；除了 <code>allowed-tools</code> 之外，没有 Agent 专属语法。",

@@ -73,7 +73,7 @@ export function SuggestCollectionButton({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="inline-flex h-9 w-fit items-center gap-1.5 rounded-full border border-border-base bg-surface px-3 text-xs font-medium text-muted-2 transition hover:border-border-strong hover:text-foreground"
+          className="inline-flex h-9 w-fit items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3 text-xs font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
         >
           <Layers className="size-3.5" />
           {t("cta")}
@@ -112,8 +112,8 @@ export function SuggestCollectionButton({
                     requested
                       ? "border-border-base bg-surface-muted text-muted-3"
                       : isTarget
-                        ? "border-brand bg-brand text-on-brand"
-                        : "border-border-base bg-surface text-muted-2 hover:border-border-strong hover:text-foreground"
+                        ? "border-brand/40 bg-brand/15 text-brand"
+                        : "border-border-base bg-surface/70 text-muted-2 hover:bg-surface-muted hover:text-foreground"
                   } disabled:cursor-not-allowed`}
                 >
                   {c.title}

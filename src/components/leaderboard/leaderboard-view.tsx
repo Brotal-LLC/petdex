@@ -175,17 +175,17 @@ function LeaderboardTable({
               role="tab"
               aria-selected={isActive}
               onClick={() => onSelect(tab.id)}
-              className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition ${
+              className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium backdrop-blur transition ${
                 isActive
-                  ? "border-inverse bg-inverse text-on-inverse"
-                  : "border-border-base bg-surface text-muted-2 hover:border-border-strong"
+                  ? "border-brand/40 bg-brand/15 text-brand"
+                  : "border-border-base bg-surface/70 text-muted-2 hover:bg-surface-muted hover:text-foreground"
               }`}
             >
               {tab.icon}
               {t(tab.labelKey)}
               <span
                 className={`font-mono text-[10px] ${
-                  isActive ? "text-on-inverse/60" : "text-muted-3"
+                  isActive ? "text-brand/70" : "text-muted-3"
                 }`}
               >
                 {count}
@@ -274,7 +274,7 @@ function LeaderboardRowItem({
       <Link
         href={`/u/${handle}`}
         prefetch={false}
-        className="group flex items-center gap-4 rounded-2xl border border-border-base bg-surface/80 px-4 py-3 transition hover:border-border-strong"
+        className="group flex items-center gap-4 rounded-2xl border border-border-base bg-surface/60 px-4 py-3 backdrop-blur transition hover:border-brand/35 hover:bg-surface"
       >
         <RankBadge rank={rank} />
 

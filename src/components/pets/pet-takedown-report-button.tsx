@@ -45,9 +45,9 @@ export function PetTakedownReportButton({
         onClick={() => {
           setReportOpen(true);
         }}
-        className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-border-base bg-surface px-4 text-sm font-medium text-muted-2 transition hover:border-chip-danger-fg/40 hover:text-chip-danger-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-chip-danger-fg/45"
+        className="inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium text-muted-3 transition hover:bg-chip-danger-fg/10 hover:text-chip-danger-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-chip-danger-fg/45"
       >
-        <Flag className="size-4" />
+        <Flag className="size-3.5" />
         {t("reportTakedown")}
       </button>
 

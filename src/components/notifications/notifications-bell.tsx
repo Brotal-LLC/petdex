@@ -104,7 +104,7 @@ export function NotificationsBell({ compact = false }: { compact?: boolean }) {
             aria-label={
               unread > 0 ? `${unread} unread notifications` : "Notifications"
             }
-            className={`relative rounded-full border border-border-base bg-surface/70 text-muted-2 backdrop-blur transition-[width,height] duration-200 hover:bg-white dark:hover:bg-stone-800 ${compact ? "size-9" : "size-11"}`}
+            className={`relative rounded-full border border-border-base bg-surface/70 text-muted-2 backdrop-blur transition-[width,height] duration-200 hover:bg-surface-muted ${compact ? "size-9" : "size-11"}`}
           >
             <Bell className="size-4" />
             {unread > 0 ? (

@@ -37,7 +37,7 @@ export default async function SubmitPage() {
     <FullAuthProviders>
       <main className="min-h-dvh bg-background">
         <SiteHeader hideSubmitCta />
-        <section className="petdex-cloud relative -mt-[84px] overflow-clip pt-[84px]">
+        <section className="petdex-hero relative -mt-14 overflow-clip pt-14">
           <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-10 px-5 pb-12 md:px-8 md:pb-16">
             <header className="max-w-3xl">
               <p className="text-sm font-medium text-brand-light">

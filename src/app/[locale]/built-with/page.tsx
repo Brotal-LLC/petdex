@@ -134,7 +134,7 @@ export default async function BuiltWithPage({
       <JsonLd data={jsonLd} />
       <SiteHeader />
 
-      <section className="petdex-cloud relative -mt-[84px] overflow-clip pt-[84px]">
+      <section className="petdex-hero relative -mt-14 overflow-clip pt-14">
         <div className="relative mx-auto flex w-full max-w-5xl flex-col px-5 pb-12 md:px-8">
           <div className="mt-12 max-w-2xl md:mt-16">
             <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">
@@ -148,16 +148,16 @@ export default async function BuiltWithPage({
             </p>
 
             <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-muted-2">
-              <span className="inline-flex items-center gap-1 rounded-full bg-surface px-3 py-1">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3 py-1 text-[13px] backdrop-blur">
                 <Star className="size-3.5" />
                 {t("stats.stars", {
                   total: formatLocalizedNumber(totalStars, locale),
                 })}
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-surface px-3 py-1">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3 py-1 text-[13px] backdrop-blur">
                 {t("stats.projects", { total })}
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-surface px-3 py-1">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3 py-1 text-[13px] backdrop-blur">
                 {t("stats.categories", { total: CATEGORY_ORDER.length })}
               </span>
             </div>
@@ -167,7 +167,7 @@ export default async function BuiltWithPage({
                 href={SUBMIT_ISSUE_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex h-11 items-center gap-2 rounded-full bg-foreground px-5 text-sm font-semibold text-background transition hover:opacity-90"
+                className="btn-3d-inverse inline-flex h-10 items-center gap-2 rounded-full bg-inverse px-4 text-[13px] font-medium text-on-inverse transition hover:bg-inverse-hover"
               >
                 <Plus className="size-4" />
                 {t("cta.submit")}
@@ -176,7 +176,7 @@ export default async function BuiltWithPage({
                 href="https://github.com/crafter-station/petdex"
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex h-11 items-center gap-2 rounded-full border border-border-base bg-surface px-4 text-sm font-medium text-muted-2 transition hover:border-border-strong"
+                className="inline-flex h-10 items-center gap-2 rounded-full border border-border-base bg-surface/70 px-4 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
               >
                 <GithubIcon className="size-4" />
                 {t("cta.starPetdex")}
@@ -225,7 +225,7 @@ export default async function BuiltWithPage({
       })}
 
       <section className="mx-auto w-full max-w-5xl px-5 pb-20 md:px-8">
-        <div className="rounded-3xl border border-border-base bg-surface/80 p-6 md:p-10">
+        <div className="rounded-2xl border border-border-base bg-surface/60 p-6 backdrop-blur md:p-8">
           <p className="font-mono text-[11px] tracking-[0.22em] text-brand uppercase">
             {t("submit.eyebrow")}
           </p>
@@ -243,7 +243,7 @@ export default async function BuiltWithPage({
               href={SUBMIT_ISSUE_URL}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-11 items-center gap-2 rounded-full bg-foreground px-5 text-sm font-semibold text-background transition hover:opacity-90"
+              className="btn-3d-inverse inline-flex h-10 items-center gap-2 rounded-full bg-inverse px-4 text-[13px] font-medium text-on-inverse transition hover:bg-inverse-hover"
             >
               <Plus className="size-4" />
               {t("submit.openIssue")}
@@ -281,7 +281,7 @@ function ProjectCard({
   const homepageUrl = safeHttpUrl(project.homepage);
   const primaryHref = homepageUrl ?? repoUrl;
   return (
-    <article className="group flex flex-col overflow-hidden rounded-2xl border border-border-base bg-surface/80 transition hover:border-border-strong">
+    <article className="group flex flex-col overflow-hidden rounded-2xl border border-border-base bg-surface/60 backdrop-blur transition hover:border-brand/35 hover:bg-surface">
       <Link
         href={primaryHref}
         target="_blank"
@@ -315,14 +315,14 @@ function ProjectCard({
 
         <div className="mt-auto flex flex-wrap items-center gap-2 pt-2">
           {project.language ? (
-            <span className="rounded-full bg-background px-2 py-0.5 font-mono text-[11px] text-muted-2">
+            <span className="rounded-full border border-border-base bg-surface/70 px-2 py-0.5 font-mono text-[11px] text-muted-2">
               {project.language}
             </span>
           ) : null}
           {project.platforms.slice(0, 3).map((plat) => (
             <span
               key={plat}
-              className="rounded-full bg-background px-2 py-0.5 font-mono text-[11px] text-muted-2"
+              className="rounded-full border border-border-base bg-surface/70 px-2 py-0.5 font-mono text-[11px] text-muted-2"
             >
               {plat}
             </span>

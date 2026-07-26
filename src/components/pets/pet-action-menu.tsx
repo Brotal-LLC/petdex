@@ -55,8 +55,8 @@ export function PetActionMenu({ pet, variant = "card", ownerActions }: Props) {
   }, []);
   const triggerClassName =
     variant === "detail"
-      ? "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-border-base bg-surface px-4 text-sm font-medium text-muted-2 transition hover:border-border-strong"
-      : "inline-flex size-8 items-center justify-center rounded-full border border-border-base bg-surface/90 text-muted-2 transition hover:border-border-strong hover:text-foreground";
+      ? "inline-flex h-9 items-center justify-center gap-1.5 rounded-full border border-border-base bg-surface/70 px-3.5 text-[13px] font-medium text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
+      : "inline-flex size-8 items-center justify-center rounded-full border border-border-base bg-surface/70 text-muted-2 backdrop-blur transition hover:bg-surface-muted hover:text-foreground";
   const menuAlign = variant === "detail" ? "start" : "end";
 
   return (
@@ -93,7 +93,7 @@ export function PetActionMenu({ pet, variant = "card", ownerActions }: Props) {
         <DropdownMenuContent
           align={menuAlign}
           sideOffset={6}
-          className="w-60 overflow-hidden rounded-2xl border border-border-base bg-surface p-0 shadow-xl shadow-blue-950/15"
+          className="w-64 p-0"
         >
           {open ? (
             <PetActionMenuContent

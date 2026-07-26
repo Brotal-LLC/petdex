@@ -41,7 +41,7 @@ export function StaticCollectionCard({
   return (
     <article
       data-slot="card"
-      className="group relative flex h-full flex-col overflow-hidden rounded-3xl border border-black/10 bg-surface/76 shadow-sm shadow-blue-950/5 backdrop-blur transition hover:-translate-y-0.5 hover:bg-white hover:shadow-xl hover:shadow-blue-950/10 dark:border-white/10 dark:hover:bg-stone-800"
+      className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-border-base bg-surface/60 backdrop-blur transition hover:border-brand/35 hover:bg-surface"
     >
       <Link
         href={`/collections/${collection.slug}`}
@@ -55,11 +55,11 @@ export function StaticCollectionCard({
           scale={0.55}
         />
       </Link>
-      <div className="flex flex-1 flex-col gap-2 border-t border-black/[0.06] px-5 pt-4 pb-5 dark:border-white/[0.06]">
+      <div className="flex flex-1 flex-col gap-2 border-t border-border-base px-5 pt-4 pb-5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-full bg-brand-tint px-2 py-0.5 font-mono text-[9px] tracking-[0.18em] text-brand-deep uppercase dark:bg-brand-tint-dark dark:text-brand-light">
+              <span className="inline-flex items-center rounded-full bg-brand/15 px-2 py-0.5 font-mono text-[9px] tracking-[0.18em] text-brand uppercase ring-1 ring-brand/25">
                 {labels.kind[kind]}
               </span>
               <span className="font-mono text-[10px] tracking-[0.18em] text-muted-3 uppercase">
@@ -77,7 +77,7 @@ export function StaticCollectionCard({
               href={collection.externalUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-8 items-center justify-center rounded-full border border-border-base bg-surface px-3 text-muted-2 text-xs transition hover:border-border-strong hover:text-foreground"
+              className="inline-flex h-8 items-center justify-center rounded-full border border-border-base bg-surface/70 px-3 text-muted-2 text-xs backdrop-blur transition hover:bg-surface-muted hover:text-foreground"
             >
               {labels.siteLink}
             </Link>
@@ -87,7 +87,7 @@ export function StaticCollectionCard({
           {collection.description}
         </p>
         {owner && labels.byOwner ? (
-          <div className="mt-auto border-t border-black/[0.05] pt-2 dark:border-white/[0.05]">
+          <div className="mt-auto border-t border-border-base pt-2">
             <Link
               href={`/u/${owner.handle}`}
               prefetch={false}

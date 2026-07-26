@@ -21,10 +21,8 @@ type PetFloaterProps = {
   size?: number;
   /**
    * Where the pet sits on first paint, expressed as fractions of the
-   * stage's width and height (0..1). Defaults to {x: 0.55, y: 0.4}
-   * which works on wide horizontal banners. For square hero stages
-   * a value like {x: 0.1, y: 0.1} keeps the pet upper-left so the
-   * sidebar info doesn't visually fight with it.
+   * stage's travel area (0..1, sprite size and safe margins already
+   * accounted for). {x: 0.5, y: 0.5} is dead center at any stage size.
    */
   initialFraction?: { x: number; y: number };
 };
@@ -254,15 +252,21 @@ export function PetFloater({
     if (!enabled) return;
     if (pos !== null) return;
     if (!bounds) return;
-    const initialX = Math.min(
-      Math.max(bounds.width * initialFraction.x, SAFE_MARGIN_PX),
-      bounds.width - SPRITE_SIZE_PX - SAFE_MARGIN_PX,
+    // Fractions map over the travel area (bounds minus sprite minus
+    // margins) so {0.5, 0.5} lands the sprite dead center regardless
+    // of stage or sprite size.
+    const travelX = Math.max(
+      bounds.width - SPRITE_SIZE_PX - SAFE_MARGIN_PX * 2,
+      0,
     );
-    const initialY = Math.min(
-      Math.max(bounds.height * initialFraction.y, SAFE_MARGIN_PX),
-      bounds.height - SPRITE_SIZE_PX - SAFE_MARGIN_PX,
+    const travelY = Math.max(
+      bounds.height - SPRITE_SIZE_PX - SAFE_MARGIN_PX * 2,
+      0,
     );
-    setPos({ x: initialX, y: initialY });
+    setPos({
+      x: SAFE_MARGIN_PX + travelX * initialFraction.x,
+      y: SAFE_MARGIN_PX + travelY * initialFraction.y,
+    });
   }, [enabled, bounds, pos, SPRITE_SIZE_PX, initialFraction]);
 
   // Idle-cycle ticker — paused while dragging.

@@ -160,7 +160,11 @@ function UserDropdown({ compact = false }: { compact?: boolean }) {
         ) : null}
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" sideOffset={8} className="w-64 p-1.5">
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="w-64 overflow-hidden p-0 text-[13px]"
+      >
         {menuOpen ? (
           <UserDropdownContent
             adminHref={adminHref}

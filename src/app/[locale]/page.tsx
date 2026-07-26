@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 import { ArrowRight } from "lucide-react";
@@ -19,8 +20,8 @@ import { CollectionActionMenu } from "@/components/collections/collection-action
 import { CollectionCover } from "@/components/collections/collection-cover";
 import { DiscordLink } from "@/components/community/discord-link";
 import { WechatCommunityDialog } from "@/components/community/wechat-community-dialog";
+import { CommandLine } from "@/components/download/command-line";
 import { DownloadDesktopCTA } from "@/components/download/download-desktop-cta";
-import { StaticCommandLine } from "@/components/download/static-command-line";
 import { DiscordIcon } from "@/components/icons/wechat-icon";
 import { JsonLd } from "@/components/layout/json-ld";
 import { PetGallery } from "@/components/pets/pet-gallery";
@@ -29,6 +30,7 @@ import { SurprisePetCard } from "@/components/pets/surprise-pet-card";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { SubmitCTA } from "@/components/submit/submit-cta";
+import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -140,13 +142,14 @@ export default async function Home({
       <JsonLd data={jsonLd} />
       <SurprisePetCard initialPet={surprisePet} />
       <SiteHeader />
-      <section className="petdex-cloud relative -mt-[84px] overflow-clip pt-[84px]">
+      <section className="petdex-hero relative -mt-14 overflow-clip pt-14">
         <div className="relative mx-auto flex w-full max-w-[1440px] flex-col px-5 pb-10 md:px-8">
           <div className="mt-12 flex flex-col items-center text-center md:mt-16">
-            <p className="font-mono text-xs tracking-[0.22em] text-brand uppercase">
+            <p className="inline-flex items-center gap-2 rounded-full border border-border-base bg-surface/60 px-3.5 py-1.5 font-mono text-[11px] tracking-[0.18em] text-brand uppercase backdrop-blur">
+              <span className="size-1.5 animate-pulse rounded-full bg-brand" />
               {t("eyebrow")}
             </p>
-            <h1 className="mt-3 text-[48px] leading-[0.98] font-semibold tracking-tight md:text-[80px]">
+            <h1 className="mt-5 text-[56px] leading-[0.95] font-semibold tracking-[-0.03em] md:text-[96px]">
               {t("title")}
             </h1>
             {locale === "zh" && (
@@ -160,32 +163,61 @@ export default async function Home({
                 brand: (chunks) => <strong>{chunks}</strong>,
               })}
             </p>
+            <div className="mt-4 flex items-center justify-center gap-3 text-xs text-muted-3">
+              <span>{t("worksWith")}</span>
+              <span className="flex items-center gap-2.5 opacity-80">
+                {(
+                  [
+                    ["claude-code", "Claude Code"],
+                    ["codex", "Codex"],
+                    ["gemini", "Gemini CLI"],
+                    ["opencode", "opencode"],
+                  ] as const
+                ).map(([slug, name]) => (
+                  <Image
+                    key={slug}
+                    src={`/brand/agents/${slug}.svg`}
+                    alt={name}
+                    title={name}
+                    width={16}
+                    height={16}
+                    className="size-4 object-contain"
+                  />
+                ))}
+              </span>
+            </div>
             <div className="mt-5 flex w-full flex-col items-stretch justify-center gap-2 sm:flex-row sm:items-center">
-              <StaticCommandLine
+              <CommandLine
                 command="npx petdex install boba"
-                className="w-full sm:w-auto"
+                className="btn-3d h-10 w-full sm:w-auto"
               />
               <DownloadDesktopCTA
                 href={`/${locale}/download`}
                 source="hero_primary"
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-inverse px-5 text-sm font-medium text-on-inverse transition hover:bg-inverse-hover"
+                className={cn(
+                  buttonVariants({
+                    variant: "petdex-cta",
+                    size: "petdex-pill",
+                    className: "gap-1.5",
+                  }),
+                )}
               >
                 {t("downloadCta")}
-                <ArrowRight className="size-4" />
+                <ArrowRight className="size-3.5" />
               </DownloadDesktopCTA>
             </div>
           </div>
 
           <HeroPetParade pets={heroPets} isZh={isZh} />
 
-          <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-            <SubmitCTA className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-inverse px-6 text-sm font-medium text-on-inverse transition hover:bg-inverse-hover">
-              {t("submitCta")}
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-muted-3">
+            <SubmitCTA variant="petdex-secondary" className="gap-1.5">
+              {t("submitCta")} →
             </SubmitCTA>
             {showWechatCommunity ? (
               <WechatCommunityDialog
                 source="hero_secondary"
-                className="h-12 bg-[#07C160]/10 px-6 text-[#07C160] hover:bg-[#07C160]/16"
+                className="inline-flex items-center gap-1.5 transition hover:text-foreground"
               >
                 {t("joinWeChat")}
               </WechatCommunityDialog>
@@ -193,7 +225,7 @@ export default async function Home({
               <DiscordLink
                 href={process.env.NEXT_PUBLIC_DISCORD_INVITE_URL}
                 source="hero_secondary"
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-[#5865F2]/25 bg-[#5865F2]/10 px-6 text-sm font-medium text-[#5865F2] backdrop-blur transition hover:bg-[#5865F2]/16"
+                className="inline-flex items-center gap-1.5 transition hover:text-foreground"
               >
                 <DiscordIcon className="size-4" />
                 {t("joinDiscord")}
@@ -201,7 +233,7 @@ export default async function Home({
             ) : (
               <Link
                 href="#gallery"
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-border-base bg-surface/70 px-6 text-sm font-medium text-foreground backdrop-blur transition hover:bg-surface"
+                className="inline-flex items-center gap-1.5 transition hover:text-foreground"
               >
                 {t("browseGallery")}
               </Link>
@@ -249,7 +281,12 @@ async function FeaturedCollections({
         </div>
         <Link
           href="/collections"
-          className="inline-flex h-10 items-center rounded-full border border-border-base bg-surface px-4 text-sm font-medium text-muted-2 transition hover:border-border-strong"
+          className={cn(
+            buttonVariants({
+              variant: "petdex-secondary",
+              size: "petdex-pill",
+            }),
+          )}
         >
           {t("viewAll")}
         </Link>
@@ -264,7 +301,7 @@ async function FeaturedCollections({
           return (
             <Card
               key={collection.slug}
-              className="group relative flex h-full flex-col gap-0 overflow-hidden rounded-3xl border border-border-base bg-surface/80 py-0 ring-0 transition hover:border-border-strong hover:shadow-xl hover:shadow-blue-950/10 has-[[aria-expanded=true]]:z-30"
+              className="group relative flex h-full flex-col gap-0 overflow-hidden rounded-2xl border border-border-base bg-surface/70 py-0 ring-0 backdrop-blur transition hover:border-brand/30 hover:bg-surface has-[[aria-expanded=true]]:z-30"
             >
               <Link
                 href={`/collections/${collection.slug}`}
@@ -276,17 +313,18 @@ async function FeaturedCollections({
                   coverSlug={collection.coverPetSlug}
                   max={5}
                   scale={0.5}
+                  className="border-b border-foreground/[0.05]"
                 />
-                <CardContent className="flex flex-1 flex-col p-5">
+                <CardContent className="flex flex-1 flex-col p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <CardTitle className="truncate text-lg font-semibold tracking-tight text-foreground">
+                    <CardTitle className="truncate text-[15px] font-semibold tracking-tight text-foreground">
                       {collection.title}
                     </CardTitle>
                     <span className="shrink-0 font-mono text-[10px] tracking-[0.18em] text-muted-3 uppercase">
                       {t("petsCount", { count: collection.pets.length })}
                     </span>
                   </div>
-                  <CardDescription className="mt-2 line-clamp-2 text-sm leading-6 text-muted-2">
+                  <CardDescription className="mt-1.5 line-clamp-2 text-[13px] leading-5 text-muted-2">
                     {collection.description}
                   </CardDescription>
                 </CardContent>
@@ -337,7 +375,8 @@ async function HeroPetParade({ pets, isZh }: HeroPetParadeProps) {
             href={`/pets/${pet.slug}`}
             prefetch={false}
             aria-label={t("openPet", { name: pet.displayName })}
-            className={`group relative flex flex-col items-center rounded-2xl border border-border-base bg-surface/60 px-3 pt-3 pb-2 shadow-lg shadow-blue-900/10 backdrop-blur-md transition hover:-translate-y-1 hover:bg-surface ${tilt} ${lift}`}
+            style={{ "--deal-delay": `${index * 70}ms` } as React.CSSProperties}
+            className={`hero-card-deal group relative flex flex-col items-center rounded-2xl border border-border-base bg-surface/70 px-3 pt-3 pb-2 backdrop-blur-md transition hover:-translate-y-1 hover:border-brand/30 hover:bg-surface ${tilt} ${lift}`}
           >
             <PetSprite
               src={pet.spritesheetPath}
