@@ -15,7 +15,11 @@ export function isMacDesktop(): boolean {
   return /^Mac/i.test(platform) || /Mac OS X/i.test(ua);
 }
 
-/** `petdex://<slug>` — swap active pet (auto-install if missing). */
+/**
+ * `petdex://<slug>` — swap active pet. The app downloads the pet first
+ * when it does not have it, so this works for a pet the visitor has
+ * never installed.
+ */
 export function buildPetdexActivateUrl(slug: string): string {
   return `petdex://${slug}`;
 }
