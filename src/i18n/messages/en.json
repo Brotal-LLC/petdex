@@ -106,8 +106,7 @@
   "home": {
     "eyebrow": "The coding agent pet index",
     "title": "Petdex",
-    "tagline": "The public gallery of animated pets for your <brand>coding agents</brand>. Browse {totalPets}+ open-source pets, preview their states, and install one with a single command.",
-    "heroCommand": "npx petdex install boba",
+    "tagline": "The public gallery of animated pets for your <brand>coding agents</brand>. Browse {totalPets}+ open-source pets, preview their states, and drop one on your desktop.",
     "downloadCta": "Get Petdex Desktop",
     "submitCta": "Submit",
     "browseGallery": "Browse gallery",
@@ -1029,7 +1028,6 @@
       "cliSubtext": "Copies the recommended terminal setup",
       "manualLabel": "Download .dmg",
       "manualSubtext": "For blocked terminals, manual macOS installs, or keeping the installer locally.",
-      "comingSoon": "Coming soon",
       "desktopOnly": "Desktop only. Visit on a Mac"
     },
     "activation": {

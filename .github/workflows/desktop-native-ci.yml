@@ -1,0 +1,259 @@
+name: petdex-desktop-native ci
+
+# The release workflow only runs on a tag, so a change that breaks a
+# platform stays invisible until someone cuts a release. This builds
+# every target the app claims in app.zon on each push that touches it.
+#
+# Building is not the bar. The hook server regression on this branch
+# compiled cleanly on every platform and still answered 401 to every
+# authenticated POST, so Linux and Windows also run the binary, drive a
+# real hook round trip, and photograph the screen. The screenshots are
+# uploaded as artifacts because a human still has to look at them.
+#
+# All three pass now, so none of them is allowed to fail: a change that
+# breaks a platform fails this check instead of being waved through.
+# What a green Windows leg still does not prove is the desktop-session
+# behavior of its Win32 paths, since the runner has no interactive
+# desktop: topmost ordering, the black color key against real wallpaper,
+# and click-through are compile-and-launch verified only.
+
+on:
+  push:
+    paths:
+      - "packages/petdex-desktop-native/**"
+      - ".github/workflows/desktop-native-ci.yml"
+  pull_request:
+    paths:
+      - "packages/petdex-desktop-native/**"
+      - ".github/workflows/desktop-native-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.expected_to_fail }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-14
+            expected_to_fail: false
+          - platform: linux
+            runner: ubuntu-latest
+            expected_to_fail: false
+          # A real Windows box, not a cross-compile: the Win32 paths
+          # (symlink privilege, the ACL fallback for the token file,
+          # `cmd /c start`) only run here, and cross-compiling proves
+          # none of them.
+          - platform: windows
+            runner: windows-2022
+            expected_to_fail: false
+
+    steps:
+      - name: Checkout petdex
+        uses: actions/checkout@v7
+
+      - name: Install Linux GUI libraries
+        # The SDK's Linux host links gtk4. Cross-compiling this from
+        # macOS fails on a missing gtk4 that says nothing about the code,
+        # which is the whole reason this job builds on a real Linux
+        # runner. WebKitGTK is deliberately absent: this app declares no
+        # web layer, so the build compiles the GTK host with the stub
+        # define and drops the webkitgtk link.
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          # webp-pixbuf-loader is the part that matters for pets. gdk-pixbuf
+          # decodes through loader plugins, and Ubuntu ships none for webp
+          # by default, so every sheet in the catalog (60 of 63 are .webp)
+          # fails to decode and the window comes up empty. libwebp alone is
+          # not enough: that is the codec, this is the plugin that reaches it.
+          sudo apt-get install -y libgtk-4-dev libx11-dev pkg-config webp-pixbuf-loader
+
+      - name: Clone the Native SDK
+        # Pinned to the same commit desktop-release.yml uses: the
+        # floating/transparent window options and fx.focusWindow this app
+        # needs are not in vercel-labs/main yet.
+        env:
+          NATIVE_SDK_REMOTE: "https://github.com/Railly/native.git"
+          NATIVE_SDK_BRANCH: "feat/floating-window-0.5.3"
+          NATIVE_SDK_REF: "b749ae5eb6fd759cc49871d2d00ae33d9fd05542"
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$NATIVE_SDK_BRANCH" "$NATIVE_SDK_REMOTE" "$GITHUB_WORKSPACE/native-sdk"
+          git -C "$GITHUB_WORKSPACE/native-sdk" fetch --depth 1 origin "$NATIVE_SDK_REF"
+          git -C "$GITHUB_WORKSPACE/native-sdk" checkout --detach "$NATIVE_SDK_REF"
+          echo "NATIVE_SDK_PATH=$GITHUB_WORKSPACE/native-sdk" >> "$GITHUB_ENV"
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Build the native CLI from the pinned SDK
+        # The published CLI carries its own manifest parser and the
+        # released one rejects app.zon's `.floating` with a bare
+        # ParseZon, so the CLI has to come from the same commit.
+        working-directory: ${{ env.NATIVE_SDK_PATH }}
+        shell: bash
+        run: |
+          zig build cli
+          echo "NATIVE_CLI=$NATIVE_SDK_PATH/zig-out/bin/native" >> "$GITHUB_ENV"
+
+      - name: Build petdex-desktop-native
+        working-directory: packages/petdex-desktop-native
+        shell: bash
+        run: |
+          "$NATIVE_CLI" build
+          ls -lh zig-out/bin/
+
+      # Compiling proves nothing about whether the app draws: the hook
+      # server regression that shipped in this branch compiled fine on
+      # every platform. These steps run the binary, exercise the hook
+      # round trip, and photograph the screen so a human can see the pet.
+
+      - name: Install a pet (Unix)
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.petdex/pets/ci-pet
+          # A known-good v2 atlas from the live catalog, so a decode
+          # failure here is the platform codec, never a bad fixture.
+          curl -fsSL -o ~/.petdex/pets/ci-pet/spritesheet.webp \
+            "$(curl -fsSL https://petdex.dev/api/install-pet/boba | sed -n 's/.*"spritesheetUrl":"\([^"]*\)".*/\1/p')"
+          printf '{"id":"ci-pet","displayName":"CI Pet","description":"ci","spritesheetPath":"spritesheet.webp"}' \
+            > ~/.petdex/pets/ci-pet/pet.json
+          ls -lh ~/.petdex/pets/ci-pet/
+
+      - name: Install a pet (Windows)
+        # PowerShell, not bash: git-bash's `~` is not $env:USERPROFILE on
+        # this runner, so the bash version wrote the pet somewhere the
+        # app never looks and the app reported NoPetInstalled with the
+        # files sitting right there.
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $dir = "$env:USERPROFILE\.petdex\pets\ci-pet"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $meta = Invoke-RestMethod -Uri "https://petdex.dev/api/install-pet/boba"
+          Invoke-WebRequest -Uri $meta.pet.spritesheetUrl -OutFile "$dir\spritesheet.webp"
+          '{"id":"ci-pet","displayName":"CI Pet","description":"ci","spritesheetPath":"spritesheet.webp"}' |
+            Set-Content -Path "$dir\pet.json" -NoNewline
+          Get-ChildItem $dir | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Run and exercise the hook server (Linux)
+        if: matrix.platform == 'linux'
+        shell: bash
+        working-directory: packages/petdex-desktop-native
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y xvfb imagemagick x11-utils
+          # Xvfb gives the GTK host a real display to draw into; without
+          # one the app has nothing to present to and the screenshot
+          # would prove nothing.
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x800x24 &
+          sleep 3
+          PETDEX_PET=ci-pet ./zig-out/bin/petdex-desktop-native > run.log 2>&1 &
+          APP_PID=$!
+          sleep 10
+          kill -0 "$APP_PID" || { echo "app died"; cat run.log; exit 1; }
+          TOKEN=$(cat ~/.petdex/runtime/update-token)
+          curl -fsS -X POST -H "x-petdex-update-token: $TOKEN" \
+            -H "Content-Type: application/json" -d '{"state":"running"}' \
+            http://127.0.0.1:7777/state
+          echo
+          curl -fsS http://127.0.0.1:7777/state
+          echo
+          import -window root /tmp/linux-screen.png
+          # The first run drew a titled window with a blank interior:
+          # frames present, the sheet decodes, nothing paints. These
+          # narrow it down. GTK's renderer matters because the default
+          # picks GL, which has no driver under Xvfb; the cairo fallback
+          # says whether that is the reason.
+          echo "=== window tree ==="
+          xwininfo -root -tree | head -20 || true
+          echo "=== app log (full) ==="
+          cat run.log
+          kill "$APP_PID" || true
+          sleep 2
+          echo "=== retry with the cairo renderer ==="
+          GSK_RENDERER=cairo PETDEX_PET=ci-pet ./zig-out/bin/petdex-desktop-native > cairo.log 2>&1 &
+          CAIRO_PID=$!
+          sleep 10
+          import -window root /tmp/linux-screen-cairo.png || true
+          kill "$CAIRO_PID" || true
+          tail -20 cairo.log
+
+      - name: Run and exercise the hook server (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        working-directory: packages/petdex-desktop-native
+        run: |
+          # Everything diagnostic runs before anything that can throw.
+          # The first version put the log dump after the token read, so
+          # a missing token killed the step and the app's own output
+          # never reached the log, leaving nothing to diagnose.
+          $ErrorActionPreference = "Continue"
+          $env:PETDEX_PET = "ci-pet"
+          $app = Start-Process -FilePath ".\zig-out\bin\petdex-desktop-native.exe" `
+            -RedirectStandardOutput run.log -RedirectStandardError run.err -PassThru
+          Start-Sleep -Seconds 12
+
+          "=== process ==="
+          if ($app.HasExited) { "EXITED, code $($app.ExitCode)" } else { "alive, pid $($app.Id)" }
+
+          "=== stdout ==="; Get-Content run.log -ErrorAction SilentlyContinue
+          "=== stderr ==="; Get-Content run.err -ErrorAction SilentlyContinue
+
+          "=== ~/.petdex tree ==="
+          Get-ChildItem "$env:USERPROFILE\.petdex" -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 40 FullName, Length | Format-Table -AutoSize
+
+          "=== listening on 7777 ==="
+          Get-NetTCPConnection -LocalPort 7777 -State Listen -ErrorAction SilentlyContinue |
+            Select-Object LocalAddress, OwningProcess | Format-Table -AutoSize
+
+          "=== titled windows ==="
+          Get-Process | Where-Object { $_.MainWindowTitle } |
+            Select-Object ProcessName, MainWindowTitle | Format-Table -AutoSize
+
+          # GDI capture of the whole desktop: the only way to see whether
+          # the window actually painted on this runner.
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$env:TEMP\windows-screen.png")
+          "screenshot saved"
+
+          $tokenPath = "$env:USERPROFILE\.petdex\runtime\update-token"
+          if (Test-Path $tokenPath) {
+            $token = Get-Content $tokenPath -Raw
+            "=== hook round trip ==="
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:7777/state" `
+              -Headers @{ "x-petdex-update-token" = $token } `
+              -ContentType "application/json" -Body '{"state":"running"}' | ConvertTo-Json -Compress
+            Invoke-RestMethod -Uri "http://127.0.0.1:7777/state" | ConvertTo-Json -Compress
+          } else {
+            "NO TOKEN at $tokenPath"
+          }
+
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          if (-not (Test-Path $tokenPath)) { throw "token was never written" }
+
+      - name: Upload the screenshot
+        if: always() && matrix.platform != 'macos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: screen-${{ matrix.platform }}
+          path: |
+            /tmp/linux-screen.png
+            /tmp/linux-screen-cairo.png
+            ${{ runner.temp }}/windows-screen.png
+          if-no-files-found: warn

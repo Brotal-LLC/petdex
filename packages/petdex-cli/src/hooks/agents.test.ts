@@ -284,9 +284,13 @@ describe("OpenCode hook plugin", () => {
 
   test("uses OpenCode v1 default file plugin shape", () => {
     const source = getPluginSource();
-    expect(source).toContain("const hooks = {");
-    expect(source).toContain(`id: "petdex"`);
-    expect(source).toContain("server: async () => hooks");
+    // The export IS the async factory: OpenCode calls it with the
+    // plugin context and expects the hooks object back. The older
+    // `const hooks = {} / server: async () => hooks` shape predates
+    // needing `client` for session titles.
+    expect(source).toContain("const PetdexPlugin = async ({ client }) =>");
+    expect(source).toContain(`"tool.execute.before"`);
+    expect(source).toContain(`"tool.execute.after"`);
     expect(source).toContain("export default PetdexPlugin");
     expect(source).toContain("export { PetdexPlugin }");
   });
@@ -329,11 +333,14 @@ describe("OpenCode hook plugin", () => {
 
   test("emits bubble text for session idle and error events", () => {
     const source = getPluginSource();
+    // title and busy ride along since bubble v2: the bubble shows the
+    // session title above the activity line, and busy=false is what
+    // ends the spinner at close of turn.
     expect(source).toContain(
-      `notify({ state: "waving", duration: 1500, text: "Done." })`,
+      `notify({ state: "waving", duration: 1500, text: "Done.", title: titleCache, busy: false })`,
     );
     expect(source).toContain(
-      `notify({ state: "failed", duration: 2500, text: "OpenCode hit an error." })`,
+      `notify({ state: "failed", duration: 2500, text: "OpenCode hit an error.", title: titleCache, busy: false })`,
     );
   });
 });

@@ -106,8 +106,7 @@
   "home": {
     "eyebrow": "El índice de mascotas para agentes de código",
     "title": "Petdex",
-    "tagline": "La galería pública de mascotas animadas para tus <brand>agentes de código</brand>. Explora más de {totalPets} mascotas open source, previsualiza sus estados e instala una con un solo comando.",
-    "heroCommand": "npx petdex install boba",
+    "tagline": "La galería pública de mascotas animadas para tus <brand>agentes de código</brand>. Explora más de {totalPets} mascotas open source, previsualiza sus estados y ponla en tu escritorio.",
     "downloadCta": "Descargar Petdex Desktop",
     "submitCta": "Enviar",
     "browseGallery": "Ver galería",
@@ -1029,7 +1028,6 @@
       "cliSubtext": "Copia el setup recomendado para terminal",
       "manualLabel": "Descargar .dmg",
       "manualSubtext": "Para terminales bloqueadas, instalacion manual en macOS o guardar el instalador localmente.",
-      "comingSoon": "Proximamente",
       "desktopOnly": "Solo escritorio. Visita desde una Mac"
     },
     "activation": {

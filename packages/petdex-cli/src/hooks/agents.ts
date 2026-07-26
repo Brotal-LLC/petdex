@@ -796,7 +796,7 @@ async function postJson(url, body, token) {
   }
 }
 
-async function notify({ state, duration, text }) {
+async function notify({ state, duration, text, title, busy }) {
   // Killswitch: users toggle this with /petdex inside their agent
   // (or 'petdex hooks toggle' from a shell). Bail before the token
   // read so the disabled state has zero filesystem cost beyond the
@@ -814,30 +814,53 @@ async function notify({ state, duration, text }) {
     duration != null
       ? { state, duration, agent_source: "opencode" }
       : { state, agent_source: "opencode" };
+  const bubbleBody = { text, agent_source: "opencode" };
+  if (title) bubbleBody.title = title;
+  if (busy !== undefined) bubbleBody.busy = busy;
   await Promise.all([
     postJson(SIDECAR_URL, stateBody, token),
-    text ? postJson(SIDECAR_BUBBLE_URL, { text, agent_source: "opencode" }, token) : Promise.resolve(),
+    text ? postJson(SIDECAR_BUBBLE_URL, bubbleBody, token) : Promise.resolve(),
   ]);
 }
 
-const hooks = {
-  "tool.execute.before": async (input, output) => notify({
-    state: "running",
-    text: formatTool(input.tool, output.args, "running"),
-  }),
-  "tool.execute.after": async (input) => notify({
-    state: "idle",
-    text: formatTool(input.tool, input.args, "done"),
-  }),
-  event: async ({ event }) => {
-    if (event.type === "session.idle") notify({ state: "waving", duration: 1500, text: "Done." });
-    else if (event.type === "session.error") notify({ state: "failed", duration: 2500, text: "OpenCode hit an error." });
-  },
-};
-
-const PetdexPlugin = {
-  id: "petdex",
-  server: async () => hooks,
+// opencode's plugin API: the export IS an async function receiving
+// the plugin context and returning the hooks object. The client gives
+// us opencode's own LLM-generated session titles for the bubble.
+const PetdexPlugin = async ({ client }) => {
+  let titleSession = null;
+  let titleCache = null;
+  async function sessionTitle(sessionID) {
+    if (!sessionID || !client) return titleCache;
+    try {
+      const res = await client.session.get({ path: { id: sessionID } });
+      const title = res?.data?.title;
+      if (typeof title === "string" && title.length > 0) {
+        titleSession = sessionID;
+        titleCache = title.length > 60 ? title.slice(0, 59) + "\u2026" : title;
+      }
+    } catch {
+      // Sidecar-grade silence: a missing title never stains the agent.
+    }
+    return titleCache;
+  }
+  return {
+    "tool.execute.before": async (input, output) => notify({
+      state: "running",
+      text: formatTool(input.tool, output.args, "running"),
+      title: await sessionTitle(input.sessionID),
+      busy: true,
+    }),
+    "tool.execute.after": async (input) => notify({
+      state: "idle",
+      text: formatTool(input.tool, input.args, "done"),
+      title: await sessionTitle(input.sessionID),
+      busy: true,
+    }),
+    event: async ({ event }) => {
+      if (event.type === "session.idle") notify({ state: "waving", duration: 1500, text: "Done.", title: titleCache, busy: false });
+      else if (event.type === "session.error") notify({ state: "failed", duration: 2500, text: "OpenCode hit an error.", title: titleCache, busy: false });
+    },
+  };
 };
 
 export default PetdexPlugin;

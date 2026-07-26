@@ -94,6 +94,12 @@ export function formatBubble(event: BubbleEvent): string {
       return past ? "Edited file" : "Editing file";
     }
     case "bash": {
+      // Claude Code's Bash tool carries a human-written description of
+      // the command ("Install dependencies") - far more readable than
+      // any heuristic over the command string. Fall back to the first
+      // word of the command only when no description rides along.
+      const desc = fieldFrom(toolInput, "description");
+      if (desc) return clip(desc, 40);
       const cmd = fieldFrom(toolInput, "command");
       if (cmd) {
         const head = clip(cmd.split(/\s+/)[0] ?? cmd, 24);

@@ -114,9 +114,8 @@
     "eyebrow": "编程智能体宠物索引",
     "eyebrow__fixme": true,
     "title": "Petdex",
-    "tagline": "面向<brand>编程智能体</brand>的公共动画宠物图库。浏览 {totalPets}+ 个开源伙伴，预览它们的动画状态，并用一条命令安装。",
+    "tagline": "面向<brand>编程智能体</brand>的公共动画宠物图库。浏览 {totalPets}+ 个开源伙伴，预览它们的动画状态，让它住进你的桌面。",
     "tagline__fixme": true,
-    "heroCommand": "npx petdex install boba",
     "downloadCta": "下载 Petdex Desktop",
     "submitCta": "提交",
     "submitCta__fixme": true,
@@ -155,7 +154,8 @@
       "viewAll": "查看全部",
       "petsCount": "{count} 个宠物"
     },
-    "worksWith": "支持"
+    "worksWith": "支持",
+    "__fixme": true
   },
   "community": {
     "metadata": {
@@ -1240,7 +1240,6 @@
       "manualLabel__fixme": true,
       "manualSubtext": "适用于终端受限、手动安装 macOS 应用，或需要本地保存安装包的场景。",
       "manualSubtext__fixme": true,
-      "comingSoon": "即将支持",
       "comingSoon__fixme": true,
       "desktopOnly": "仅桌面版，请用 Mac 访问",
       "desktopOnly__fixme": true

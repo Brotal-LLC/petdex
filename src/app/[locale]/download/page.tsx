@@ -164,7 +164,6 @@ export default async function DownloadPage() {
                 cliSubtext: t("hero.cliSubtext"),
                 manualLabel: t("hero.manualLabel"),
                 manualSubtext: t("hero.manualSubtext"),
-                comingSoonLabel: t("hero.comingSoon"),
                 desktopOnlyLabel: t("hero.desktopOnly"),
                 pendingBefore: t("pendingPet.messageBefore"),
                 pendingAfter: t("pendingPet.messageAfter"),

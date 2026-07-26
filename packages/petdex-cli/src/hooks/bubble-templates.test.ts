@@ -109,6 +109,20 @@ describe("formatBubble - bash/shell", () => {
     ).toBe("Ran git");
   });
 
+  test("description beats the command heuristic", () => {
+    expect(
+      formatBubble({
+        kind: "tool",
+        phase: "running",
+        toolName: "Bash",
+        toolInput: {
+          command: "for f in *.svg; do magick $f out.png; done",
+          description: "Rasterize agent SVGs",
+        },
+      }),
+    ).toBe("Rasterize agent SVGs");
+  });
+
   test("missing command falls back", () => {
     expect(
       formatBubble({

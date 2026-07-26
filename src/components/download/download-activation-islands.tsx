@@ -18,7 +18,6 @@ type HeroLabels = {
   cliSubtext: string;
   manualLabel: string;
   manualSubtext: string;
-  comingSoonLabel: string;
   desktopOnlyLabel: string;
   pendingBefore: string;
   pendingAfter: string;
@@ -85,7 +84,6 @@ function DownloadHeroActionsContent({
         cliSubtext={labels.cliSubtext}
         manualLabel={labels.manualLabel}
         manualSubtext={labels.manualSubtext}
-        comingSoonLabel={labels.comingSoonLabel}
         desktopOnlyLabel={labels.desktopOnlyLabel}
       />
     </>

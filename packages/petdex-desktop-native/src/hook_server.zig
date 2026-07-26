@@ -16,6 +16,15 @@
 //! once per event, nothing keeps sockets open.
 
 const std = @import("std");
+const plat = @import("plat.zig");
+
+/// One connection, plus the Io that owns it. Everything downstream of
+/// accept() needs both, and passing them as a pair keeps the response
+/// helpers' signatures as flat as the old bare fd was.
+const Conn = struct {
+    stream: std.Io.net.Stream,
+    io: std.Io,
+};
 
 pub const max_pending = 50;
 
@@ -32,6 +41,11 @@ pub const StateEvent = struct {
 pub const Bubble = struct {
     text: [200]u8 = @splat(0),
     text_len: usize = 0,
+    title: [96]u8 = @splat(0),
+    title_len: usize = 0,
+    agent: [24]u8 = @splat(0),
+    agent_len: usize = 0,
+    busy: bool = false,
     counter: u64 = 0,
 };
 
@@ -88,12 +102,19 @@ pub const Mailbox = struct {
         return head;
     }
 
-    pub fn setBubble(self: *Mailbox, text: []const u8) u64 {
+    pub fn setBubble(self: *Mailbox, text: []const u8, agent: []const u8, title: []const u8, busy: bool) u64 {
         self.mutex.lock();
         defer self.mutex.unlock();
         const n = @min(text.len, self.bubble.text.len);
         @memcpy(self.bubble.text[0..n], text[0..n]);
         self.bubble.text_len = n;
+        const an = @min(agent.len, self.bubble.agent.len);
+        @memcpy(self.bubble.agent[0..an], agent[0..an]);
+        self.bubble.agent_len = an;
+        const tn = @min(title.len, self.bubble.title.len);
+        @memcpy(self.bubble.title[0..tn], title[0..tn]);
+        self.bubble.title_len = tn;
+        self.bubble.busy = busy;
         self.bubble.counter += 1;
         self.bubble_dirty = true;
         return self.bubble.counter;
@@ -116,26 +137,13 @@ const valid_states = [_][]const u8{
     "jumping", "failed", "review", "waiting",
 };
 
-/// Session token entropy straight from the kernel CSPRNG; Zig 0.16
-/// removed the ambient std.crypto.random and /dev/urandom is the
-/// honest cross-Unix source (Windows swaps this in a later slice).
-fn fillRandom(out: []u8) !void {
-    const fd = std.c.open("/dev/urandom", .{ .ACCMODE = .RDONLY });
-    if (fd < 0) return error.EntropyUnavailable;
-    defer _ = std.c.close(fd);
-    var off: usize = 0;
-    while (off < out.len) {
-        const n = std.c.read(fd, out.ptr + off, out.len - off);
-        if (n <= 0) return error.EntropyUnavailable;
-        off += @intCast(n);
-    }
-}
+/// Session token entropy straight from the kernel CSPRNG. Zig 0.16
+/// removed the ambient std.crypto.random; the hand-rolled
+/// /dev/urandom read that replaced it was POSIX-only, so this now
+/// goes through Io, which picks the right source per platform.
+const fillRandom = plat.fillRandom;
 
-fn nowMs() i64 {
-    var tv: std.c.timeval = undefined;
-    _ = std.c.gettimeofday(&tv, null);
-    return @as(i64, tv.sec) * 1000 + @divTrunc(@as(i64, tv.usec), 1000);
-}
+const nowMs = plat.nowMs;
 
 fn isValidState(s: []const u8) bool {
     for (valid_states) |v| {
@@ -176,7 +184,7 @@ pub fn start(allocator: std.mem.Allocator, home: []const u8) !void {
         .allocator = allocator,
         .runtime_dir = runtime_dir,
         .token = undefined,
-        .pid = @intCast(std.c.getpid()),
+        .pid = @intCast(plat.processId()),
     };
     var raw: [32]u8 = undefined;
     try fillRandom(&raw);
@@ -192,62 +200,68 @@ fn run(server: *Server) void {
     };
     mirrorState(server, "idle", 0) catch {};
 
-    var addr: std.c.sockaddr.in = .{
-        .family = std.c.AF.INET,
-        .port = std.mem.nativeToBig(u16, 7777),
-        .addr = std.mem.nativeToBig(u32, 0x7f000001),
-        .zero = @splat(0),
-    };
-    const fd = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
-    if (fd < 0) {
-        std.debug.print("petdex: hook server socket failed\n", .{});
-        return;
-    }
-    defer _ = std.c.close(fd);
-    var one: c_int = 1;
-    _ = std.c.setsockopt(fd, std.c.SOL.SOCKET, std.c.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
-    if (std.c.bind(fd, @ptrCast(&addr), @sizeOf(std.c.sockaddr.in)) != 0) {
+    // This thread owns its Io for its whole life: the listener blocks
+    // in accept() forever and must never touch the main thread's.
+    var scope = plat.Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+
+    const addr: std.Io.net.IpAddress = .{ .ip4 = .loopback(7777) };
+    var listener = addr.listen(io, .{
+        .kernel_backlog = 16,
+        .reuse_address = true,
+        .mode = .stream,
+        .protocol = .tcp,
+    }) catch {
         std.debug.print("petdex: :7777 bind failed; is another petdex running?\n", .{});
         return;
-    }
-    if (std.c.listen(fd, 16) != 0) {
-        std.debug.print("petdex: listen failed\n", .{});
-        return;
-    }
+    };
+    defer listener.deinit(io);
     std.debug.print("petdex: hook server on 127.0.0.1:7777 (in-process)\n", .{});
 
     while (true) {
-        const conn = std.c.accept(fd, null, null);
-        if (conn < 0) continue;
-        handleConnection(server, conn);
-        _ = std.c.close(conn);
+        const stream = listener.accept(io) catch continue;
+        var conn: Conn = .{ .stream = stream, .io = io };
+        handleConnection(server, &conn);
+        stream.close(io);
     }
 }
 
-fn handleConnection(server: *Server, conn: std.c.fd_t) void {
+fn handleConnection(server: *Server, conn: *Conn) void {
     var buf: [8192]u8 = undefined;
+    var read_buf: [8192]u8 = undefined;
+    var reader = conn.stream.reader(conn.io, &read_buf);
+    const r = &reader.interface;
+
+    // Headers line by line: a sized read would block waiting for bytes
+    // the client will not send until it sees a response (the old
+    // std.c.read returned whatever one syscall had, this does not).
     var total: usize = 0;
-    // Read until end of headers; then honor content-length (bounded).
-    const header_end = while (total < buf.len) {
-        const n = std.c.read(conn, buf[total..].ptr, buf.len - total);
-        if (n <= 0) break total;
-        total += @intCast(n);
-        if (std.mem.indexOf(u8, buf[0..total], "\r\n\r\n")) |idx| break idx + 4;
-    } else total;
-    if (header_end == 0 or header_end > total) return;
-    const head = buf[0..header_end];
+    while (true) {
+        // Inclusive, not exclusive: the exclusive form leaves the '\n'
+        // in the stream, so the next line would start with it and read
+        // back as empty, ending the loop after the request line.
+        const line = r.takeDelimiterInclusive('\n') catch return;
+        const trimmed = std.mem.trimEnd(u8, line, "\r\n");
+        if (total + trimmed.len + 2 > buf.len) return;
+        @memcpy(buf[total..][0..trimmed.len], trimmed);
+        buf[total + trimmed.len] = '\r';
+        buf[total + trimmed.len + 1] = '\n';
+        total += trimmed.len + 2;
+        if (trimmed.len == 0) break;
+    }
+    if (total == 0) return;
+    const head = buf[0..total];
 
     const content_length = headerValueInt(head, "content-length") orelse 0;
-    if (content_length > buf.len - header_end) {
+    if (content_length > buf.len - total) {
         respond(conn, 413, "{\"ok\":false,\"error\":\"body_too_large\"}");
         return;
     }
-    while (total < header_end + content_length) {
-        const n = std.c.read(conn, buf[total..].ptr, buf.len - total);
-        if (n <= 0) break;
-        total += @intCast(n);
-    }
-    const body = buf[header_end..@min(total, header_end + content_length)];
+    const body = if (content_length == 0) buf[total..total] else blk: {
+        const got = r.readSliceShort(buf[total..][0..content_length]) catch break :blk buf[total..total];
+        break :blk buf[total..][0..got];
+    };
 
     var line_it = std.mem.splitSequence(u8, head, "\r\n");
     const request_line = line_it.next() orelse return;
@@ -259,7 +273,7 @@ fn handleConnection(server: *Server, conn: std.c.fd_t) void {
     route(server, conn, method, path, head, body);
 }
 
-fn route(server: *Server, conn: std.c.fd_t, method: []const u8, path: []const u8, head: []const u8, body: []const u8) void {
+fn route(server: *Server, conn: *Conn, method: []const u8, path: []const u8, head: []const u8, body: []const u8) void {
     const get = std.mem.eql(u8, method, "GET");
     const post = std.mem.eql(u8, method, "POST");
     var scratch: [512]u8 = undefined;
@@ -327,8 +341,11 @@ fn route(server: *Server, conn: std.c.fd_t, method: []const u8, path: []const u8
         const text = jsonString(body, "text") orelse
             return respond(conn, 400, "{\"ok\":false,\"error\":\"missing_text\"}");
         const capped = text[0..@min(text.len, 200)];
-        const counter = mailbox.setBubble(capped);
-        mirrorBubble(server, capped, counter) catch {};
+        const agent = jsonString(body, "agent_source") orelse "";
+        const title = jsonString(body, "title") orelse "";
+        const busy = std.mem.indexOf(u8, body, "\"busy\":true") != null;
+        const counter = mailbox.setBubble(capped, agent[0..@min(agent.len, 24)], title[0..@min(title.len, 96)], busy);
+        mirrorBubble(server, capped, counter, title[0..@min(title.len, 96)], agent[0..@min(agent.len, 24)], busy) catch {};
         const out = std.fmt.bufPrint(&scratch, "{{\"ok\":true,\"counter\":{d}}}", .{counter}) catch return;
         return respond(conn, 200, out);
     }
@@ -349,28 +366,19 @@ fn tokenOk(server: *Server, head: []const u8) bool {
 
 /// Serve a runtime mirror file if present, else the given fallback
 /// JSON. Bounded read; these files are small JSON blobs we write.
-fn respondRuntimeFile(server: *Server, conn: std.c.fd_t, name: []const u8, fallback: []const u8) void {
+fn respondRuntimeFile(server: *Server, conn: *Conn, name: []const u8, fallback: []const u8) void {
     var path_buf: [512]u8 = undefined;
-    const path_z = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ server.runtime_dir, name }) catch {
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ server.runtime_dir, name }) catch {
         return respond(conn, 200, fallback);
     };
-    const fd = std.c.open(path_z, .{ .ACCMODE = .RDONLY });
-    if (fd < 0) return respond(conn, 200, fallback);
-    defer _ = std.c.close(fd);
     var buf: [4096]u8 = undefined;
-    var total: usize = 0;
-    while (total < buf.len) {
-        const n = std.c.read(fd, buf[total..].ptr, buf.len - total);
-        if (n <= 0) break;
-        total += @intCast(n);
-    }
-    if (total == 0) return respond(conn, 200, fallback);
-    respond(conn, 200, buf[0..total]);
+    const contents = plat.readFileIo(conn.io, path, &buf) orelse return respond(conn, 200, fallback);
+    respond(conn, 200, contents);
 }
 
 // ------------------------------------------------------------ http helpers
 
-fn respond(conn: std.c.fd_t, status: u16, body: []const u8) void {
+fn respond(conn: *Conn, status: u16, body: []const u8) void {
     var buf: [1024]u8 = undefined;
     const reason = switch (status) {
         200 => "OK",
@@ -387,13 +395,11 @@ fn respond(conn: std.c.fd_t, status: u16, body: []const u8) void {
     writeAll(conn, body);
 }
 
-fn writeAll(conn: std.c.fd_t, bytes: []const u8) void {
-    var off: usize = 0;
-    while (off < bytes.len) {
-        const n = std.c.write(conn, bytes.ptr + off, bytes.len - off);
-        if (n <= 0) return;
-        off += @intCast(n);
-    }
+fn writeAll(conn: *Conn, bytes: []const u8) void {
+    var write_buf: [64]u8 = undefined;
+    var writer = conn.stream.writer(conn.io, &write_buf);
+    writer.interface.writeAll(bytes) catch return;
+    writer.interface.flush() catch return;
 }
 
 fn headerValue(head: []const u8, name: []const u8) ?[]const u8 {
@@ -420,6 +426,14 @@ fn headerValueInt(head: []const u8, name: []const u8) ?usize {
 /// enum words and bubble text is capped ASCII-ish) and "key":number.
 /// Escaped quotes in bubble text truncate at the escape, which only
 /// shortens the bubble, never corrupts memory.
+pub fn jsonStringPub(body: []const u8, key: []const u8) ?[]const u8 {
+    return jsonString(body, key);
+}
+
+pub fn jsonNumberPub(body: []const u8, key: []const u8) ?f64 {
+    return jsonNumber(body, key);
+}
+
 fn jsonString(body: []const u8, key: []const u8) ?[]const u8 {
     var pat_buf: [32]u8 = undefined;
     const pat = std.fmt.bufPrint(&pat_buf, "\"{s}\"", .{key}) catch return null;
@@ -448,20 +462,12 @@ fn jsonNumber(body: []const u8, key: []const u8) ?f64 {
 // --------------------------------------------------------- runtime files
 
 fn writeRuntimeFile(server: *Server, name: []const u8, bytes: []const u8, mode: u16) !void {
-    var dir_buf: [512]u8 = undefined;
-    const dir_z = std.fmt.bufPrintZ(&dir_buf, "{s}", .{server.runtime_dir}) catch return error.PathTooLong;
-    _ = std.c.mkdir(dir_z, 0o755);
+    plat.makeDir(server.runtime_dir);
     var path_buf: [512]u8 = undefined;
-    const path_z = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ server.runtime_dir, name }) catch return error.PathTooLong;
-    const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, mode));
-    if (fd < 0) return error.OpenFailed;
-    defer _ = std.c.close(fd);
-    var off: usize = 0;
-    while (off < bytes.len) {
-        const n = std.c.write(fd, bytes.ptr + off, bytes.len - off);
-        if (n <= 0) return error.WriteFailed;
-        off += @intCast(n);
-    }
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ server.runtime_dir, name }) catch return error.PathTooLong;
+    // The 0600 on update-token is a POSIX guarantee only; on Windows
+    // the file inherits the parent ACL (see plat.permissionsFromMode).
+    if (!plat.writeFileMode(path, bytes, mode)) return error.WriteFailed;
 }
 
 fn mirrorState(server: *Server, state: []const u8, counter: u64) !void {
@@ -470,8 +476,8 @@ fn mirrorState(server: *Server, state: []const u8, counter: u64) !void {
     try writeRuntimeFile(server, "state.json", json, 0o644);
 }
 
-fn mirrorBubble(server: *Server, text: []const u8, counter: u64) !void {
-    var buf: [512]u8 = undefined;
-    const json = try std.fmt.bufPrint(&buf, "{{\"text\":\"{s}\",\"counter\":{d},\"at\":{d}}}", .{ text, counter, nowMs() });
+fn mirrorBubble(server: *Server, text: []const u8, counter: u64, title: []const u8, agent: []const u8, busy: bool) !void {
+    var buf: [1024]u8 = undefined;
+    const json = try std.fmt.bufPrint(&buf, "{{\"text\":\"{s}\",\"title\":\"{s}\",\"agent_source\":\"{s}\",\"busy\":{},\"counter\":{d},\"at\":{d}}}", .{ text, title, agent, busy, counter, nowMs() });
     try writeRuntimeFile(server, "bubble.json", json, 0o644);
 }

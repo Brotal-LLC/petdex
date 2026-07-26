@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 
-import { eventFromArgs, stateForEvent } from "./bubble-runner";
+import {
+  clipPreview,
+  clipTitle,
+  eventFromArgs,
+  lastAssistantText,
+  pruneSessions,
+  rememberSessionTitle,
+  sessionTitle,
+  stateForEvent,
+} from "./bubble-runner";
 
 describe("eventFromArgs - session-level", () => {
   test("stop returns session.end", () => {
@@ -128,5 +138,79 @@ describe("stateForEvent", () => {
 
   test("unknown phase returns null", () => {
     expect(stateForEvent(["bogus"], null)).toBeNull();
+  });
+});
+
+describe("session titles", () => {
+  test("remember then read round-trips a clipped title", () => {
+    const dir = `${process.env.TMPDIR ?? "/tmp"}/petdex-title-test-${Date.now()}`;
+    rememberSessionTitle(dir, "abc-123", "  arregla   el login\n con oauth  ");
+    expect(sessionTitle(dir, "abc-123")).toBe("arregla el login con oauth");
+  });
+
+  test("missing session reads null", () => {
+    const dir = `${process.env.TMPDIR ?? "/tmp"}/petdex-title-test-miss-${Date.now()}`;
+    expect(sessionTitle(dir, "nope")).toBeNull();
+  });
+
+  test("clipTitle caps at 60 with ellipsis", () => {
+    const long = "a".repeat(80);
+    const clipped = clipTitle(long);
+    expect(clipped.length).toBe(60);
+    expect(clipped.endsWith("…")).toBe(true);
+  });
+});
+
+describe("close-of-turn preview", () => {
+  test("extracts the newest assistant text from a transcript tail", () => {
+    const dir = `${process.env.TMPDIR ?? "/tmp"}/petdex-transcript-${Date.now()}`;
+    mkdirSync(dir, { recursive: true });
+    const path = `${dir}/t.jsonl`;
+    const lines = [
+      JSON.stringify({ type: "user", message: { content: "hola" } }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "older answer" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "Bash" },
+            { type: "text", text: "Listo, el fix quedo\npusheado." },
+          ],
+        },
+      }),
+      JSON.stringify({ type: "system", subtype: "hook" }),
+    ];
+    writeFileSync(path, lines.join("\n"));
+    expect(lastAssistantText(path)).toBe("Listo, el fix quedo\npusheado.");
+  });
+
+  test("missing transcript reads null", () => {
+    expect(lastAssistantText("/nope/definitely-missing.jsonl")).toBeNull();
+  });
+
+  test("clipPreview flattens and caps", () => {
+    expect(clipPreview("hola\n  mundo")).toBe("hola mundo");
+    const long = "x".repeat(200);
+    expect(clipPreview(long).length).toBe(110);
+    expect(clipPreview(long).endsWith("…")).toBe(true);
+  });
+});
+
+describe("session GC", () => {
+  test("prunes only stale files", () => {
+    const dir = `${process.env.TMPDIR ?? "/tmp"}/petdex-gc-${Date.now()}`;
+    mkdirSync(dir, { recursive: true });
+    const fresh = `${dir}/fresh.json`;
+    const stale = `${dir}/stale.json`;
+    writeFileSync(fresh, "{}");
+    writeFileSync(stale, "{}");
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(stale, old, old);
+    pruneSessions(dir);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(stale)).toBe(false);
   });
 });

@@ -84,11 +84,20 @@ const PLATFORM_ASSET_PATTERNS: Record<string, RegExp[]> = {
   "darwin-arm64": [
     /^Petdex-arm64\.dmg$/, // signed + notarized DMG, drag-to-Applications UX
     /^petdex-desktop-darwin-arm64(\.zip)?$/, // bare binary, legacy CLI flow
+    /^petdex-desktop-native-darwin-arm64\.zip$/, // native rewrite bundle
   ],
   "darwin-x64": [/^Petdex-x64\.dmg$/, /^petdex-desktop-darwin-x64(\.zip)?$/],
-  "linux-x64": [/^petdex-desktop-linux-x64(\.tar\.gz)?$/],
+  // The native rewrite is the only build that produces a Linux binary:
+  // the WebView desktop never had a Linux release job.
+  "linux-x64": [
+    /^petdex-desktop-linux-x64(\.tar\.gz)?$/,
+    /^petdex-desktop-native-linux-x64$/,
+  ],
   "linux-arm64": [/^petdex-desktop-linux-arm64(\.tar\.gz)?$/],
-  "win32-x64": [/^petdex-desktop-win32-x64\.(exe|zip)$/],
+  "win32-x64": [
+    /^petdex-desktop-win32-x64\.(exe|zip)$/,
+    /^petdex-desktop-native-win32-x64\.exe$/,
+  ],
 };
 
 function pickAssetForPlatform(

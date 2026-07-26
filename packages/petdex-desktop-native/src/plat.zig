@@ -1,0 +1,290 @@
+//! Portable file/socket/clock primitives for the off-main-thread code.
+//!
+//! The hook server thread, the hook runner process, and agent-hook
+//! detection all need small blocking IO, and none of them can borrow
+//! `init.io`: that Io belongs to the main thread and the runtime
+//! thread must not touch it. The previous answer was raw `std.c`,
+//! which pinned the whole app to POSIX and broke the Windows target
+//! (`std.c.open`'s variadic `mode_t` is not expressible in the
+//! x86_64_win calling convention).
+//!
+//! The answer here is the shape the SDK itself uses for exactly this
+//! situation (`src/embed/host.zig`, `src/platform/macos/root.zig`):
+//! a caller-owned `std.Io.Threaded`. Each thread builds its own Io, so
+//! the main-thread invariant holds by construction rather than by
+//! comment, and every operation below is `std.Io.Dir`/`std.Io.net`,
+//! which already carry the Windows implementations.
+//!
+//! `std.posix` is deliberately not used: in Zig 0.16 it kept only
+//! `read`/`openat` plus mmap and signal bits, and even `posix.read` is
+//! `@compileError("unsupported OS")` on Windows, so it is a POSIX
+//! escape hatch, not a portability layer.
+
+const std = @import("std");
+const builtin = @import("builtin");
+
+/// One Io per calling thread. Cheap to build (no worker threads spin
+/// up until an async call asks for them) and never shared, so the
+/// blocking helpers below are safe from any thread.
+pub const Scope = struct {
+    threaded: std.Io.Threaded,
+
+    pub fn init() Scope {
+        // Allocator.failing is what the SDK passes when a scope only
+        // does blocking calls: it is consulted solely by the async
+        // vtable entries, which nothing here reaches.
+        return .{ .threaded = std.Io.Threaded.init(std.heap.page_allocator, .{}) };
+    }
+
+    pub fn io(self: *Scope) std.Io {
+        return self.threaded.io();
+    }
+
+    pub fn deinit(self: *Scope) void {
+        self.threaded.deinit();
+    }
+};
+
+/// Read a whole file into a caller buffer. Null on any failure or an
+/// empty file, matching the std.c helpers this replaces (callers treat
+/// "no bytes" and "no file" identically).
+pub fn readFile(path: []const u8, buf: []u8) ?[]const u8 {
+    var scope = Scope.init();
+    defer scope.deinit();
+    return readFileIo(scope.io(), path, buf);
+}
+
+pub fn readFileIo(io: std.Io, path: []const u8, buf: []u8) ?[]const u8 {
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    defer file.close(io);
+    var read_buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = reader.interface.readSliceShort(buf[total..]) catch break;
+        if (n == 0) break;
+        total += n;
+    }
+    if (total == 0) return null;
+    return buf[0..total];
+}
+
+/// Last `buf.len` bytes of a file. Used for transcript tails, where
+/// the head is uninteresting and the file can be many megabytes.
+pub fn readFileTail(path: []const u8, buf: []u8) ?[]const u8 {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    defer file.close(io);
+    var read_buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const size = reader.getSize() catch return null;
+    if (size == 0) return null;
+    const want: u64 = @min(size, buf.len);
+    reader.seekTo(size - want) catch return null;
+    var total: usize = 0;
+    while (total < want) {
+        const n = reader.interface.readSliceShort(buf[total..@intCast(want)]) catch break;
+        if (n == 0) break;
+        total += n;
+    }
+    if (total == 0) return null;
+    return buf[0..total];
+}
+
+/// Allocate-and-read, capped at `max`. Returns a slice sized to the
+/// bytes actually read so the caller's free matches the allocation.
+pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8, max: usize) ?[]u8 {
+    const buf = allocator.alloc(u8, max) catch return null;
+    var scope = Scope.init();
+    defer scope.deinit();
+    const got = readFileIo(scope.io(), path, buf) orelse {
+        allocator.free(buf);
+        return null;
+    };
+    return allocator.realloc(buf, got.len) catch buf[0..got.len];
+}
+
+pub fn writeFile(path: []const u8, bytes: []const u8) bool {
+    var scope = Scope.init();
+    defer scope.deinit();
+    return writeFileIo(scope.io(), path, bytes, null);
+}
+
+/// `mode` is the POSIX permission bits and is honored only there; on
+/// Windows the ACL inherited from the parent directory governs, which
+/// is why the token file's 0600 cannot be reproduced (see hook_server).
+pub fn writeFileMode(path: []const u8, bytes: []const u8, mode: u16) bool {
+    var scope = Scope.init();
+    defer scope.deinit();
+    return writeFileIo(scope.io(), path, bytes, mode);
+}
+
+fn writeFileIo(io: std.Io, path: []const u8, bytes: []const u8, mode: ?u16) bool {
+    var file = std.Io.Dir.cwd().createFile(io, path, .{
+        .truncate = true,
+        .permissions = permissionsFromMode(mode),
+    }) catch return false;
+    defer file.close(io);
+    var write_buf: [4096]u8 = undefined;
+    var writer = file.writer(io, &write_buf);
+    writer.interface.writeAll(bytes) catch return false;
+    writer.interface.flush() catch return false;
+    return true;
+}
+
+/// On Windows `Permissions` is a readonly-attribute enum with no mode
+/// bits, so a requested POSIX mode degrades to the inherited ACL.
+fn permissionsFromMode(mode: ?u16) std.Io.File.Permissions {
+    const m = mode orelse return .default_file;
+    if (builtin.os.tag == .windows) return .default_file;
+    return @enumFromInt(m);
+}
+
+pub fn makeDir(path: []const u8) void {
+    var scope = Scope.init();
+    defer scope.deinit();
+    // Already-exists is the common case at every call site, so the
+    // error is swallowed exactly like the old `_ = std.c.mkdir(...)`.
+    std.Io.Dir.cwd().createDirPath(scope.io(), path) catch {};
+}
+
+pub fn deleteFile(path: []const u8) void {
+    var scope = Scope.init();
+    defer scope.deinit();
+    std.Io.Dir.cwd().deleteFile(scope.io(), path) catch {};
+}
+
+pub fn fileExists(path: []const u8) bool {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    file.close(io);
+    return true;
+}
+
+pub fn dirExists(path: []const u8) bool {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
+    dir.close(io);
+    return true;
+}
+
+/// Iterate `dir`, calling `visit` with each entry basename. The
+/// callback shape avoids handing an iterator (and its Io lifetime)
+/// back to the caller.
+pub fn forEachEntry(
+    path: []const u8,
+    context: anytype,
+    comptime visit: fn (@TypeOf(context), []const u8) void,
+) void {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch return) |entry| visit(context, entry.name);
+}
+
+pub fn readStdin(buf: []u8) []const u8 {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    var read_buf: [4096]u8 = undefined;
+    var reader = std.Io.File.stdin().reader(io, &read_buf);
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = reader.interface.readSliceShort(buf[total..]) catch break;
+        if (n == 0) break;
+        total += n;
+    }
+    return buf[0..total];
+}
+
+// ------------------------------------------------------------------ clock
+
+pub fn nowMs() i64 {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const ns = std.Io.Timestamp.now(scope.io(), .real).nanoseconds;
+    return @intCast(@divTrunc(ns, std.time.ns_per_ms));
+}
+
+pub fn nowSeconds() i64 {
+    return @divTrunc(nowMs(), 1000);
+}
+
+// ----------------------------------------------------------------- random
+
+/// Session token entropy. `std.crypto.random` is gone in 0.16 and
+/// reading /dev/urandom by hand was the POSIX-only stand-in; this is
+/// the OS CSPRNG through Io, which already picks getrandom on Linux,
+/// getentropy on Darwin, and RtlGenRandom on Windows.
+pub fn fillRandom(out: []u8) !void {
+    var scope = Scope.init();
+    defer scope.deinit();
+    try std.Io.randomSecure(scope.io(), out);
+}
+
+// ---------------------------------------------------------------- process
+
+/// Absolute path of the running binary. Replaces realpath(argv0),
+/// which lied whenever argv0 was a bare name found on PATH.
+pub fn executablePath(buf: []u8) ?[]const u8 {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const len = std.process.executablePath(scope.io(), buf) catch return null;
+    return buf[0..len];
+}
+
+/// Point `link` at `target`, replacing any existing link.
+///
+/// Windows caveat: creating a symlink needs either Developer Mode or
+/// SeCreateSymbolicLinkPrivilege, so this can fail on a default
+/// install. The caller treats failure as "hooks not wired" rather than
+/// crashing, and the hook command already exits 0 when the link is
+/// missing, so the app degrades to no bubbles instead of breaking.
+pub fn replaceSymlink(target: []const u8, link: []const u8) bool {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    const cwd = std.Io.Dir.cwd();
+    cwd.deleteFile(io, link) catch {};
+    cwd.symLink(io, target, link, .{}) catch return false;
+    return true;
+}
+
+/// Own pid, for the /whoami endpoint. std has no portable accessor in
+/// 0.16, so this is the one genuine per-platform branch in this file.
+pub fn processId() u32 {
+    return switch (builtin.os.tag) {
+        .windows => std.os.windows.GetCurrentProcessId(),
+        else => @intCast(std.c.getpid()),
+    };
+}
+
+/// Open a URL or a folder in the desktop's default handler. One
+/// spawn, no shell, so a path with quotes cannot become an argument
+/// injection the way the old `system()` string could.
+pub fn openExternal(target: []const u8) void {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .windows => &.{ "cmd", "/c", "start", "", target },
+        .macos => &.{ "/usr/bin/open", target },
+        else => &.{ "xdg-open", target },
+    };
+    var child = std.process.spawn(io, .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return;
+    _ = child.wait(io) catch {};
+}

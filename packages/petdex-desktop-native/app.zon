@@ -7,16 +7,27 @@
     .icons = .{"assets/icon.png"},
     .platforms = .{ "macos", "windows", "linux" },
     .permissions = .{ "view", "command" },
-    .capabilities = .{ "native_views", "gpu_surfaces" },
+    .capabilities = .{ "native_views", "gpu_surfaces", "menus" },
+    .menus = .{
+        .{
+            .title = "Pet",
+            .items = .{
+                .{ .label = "Settings...", .command = "petdex.settings", .key = ",", .modifiers = .{"primary"} },
+                .{ .label = "Close Pet", .command = "petdex.close", .key = "w", .modifiers = .{"primary"} },
+            },
+        },
+    },
     .shell = .{
         .windows = .{
             .{
                 .label = "main",
                 .title = "Petdex",
-                .width = 192,
-                .height = 208,
+                .width = 231,
+                .height = 250,
                 .resizable = false,
                 .titlebar = "chromeless",
+                .floating = true,
+                .transparent = true,
                 .restore_state = false,
                 .restore_policy = "center_on_primary",
                 .views = .{
