@@ -21,11 +21,11 @@ function pinToLatest(command: string): string {
 
 describe("pinToLatest", () => {
   test("rewrites `npx petdex <args>` to `npx petdex@latest <args>`", () => {
-    expect(pinToLatest("npx petdex install desktop")).toBe(
-      "npx petdex@latest install desktop",
+    expect(pinToLatest("npx petdex install boba")).toBe(
+      "npx petdex@latest install boba",
     );
-    expect(pinToLatest("npx petdex hooks install")).toBe(
-      "npx petdex@latest hooks install",
+    expect(pinToLatest("npx petdex submit ./my-pet")).toBe(
+      "npx petdex@latest submit ./my-pet",
     );
     expect(pinToLatest("npx petdex install boba")).toBe(
       "npx petdex@latest install boba",
@@ -33,19 +33,21 @@ describe("pinToLatest", () => {
   });
 
   test("rewrites bare `petdex <args>` to `npx petdex@latest <args>`", () => {
-    // A user might paste `petdex up` because they have it on
-    // PATH globally — we still want the copy form to work for
-    // someone who doesn't.
-    expect(pinToLatest("petdex up")).toBe("npx petdex@latest up");
-    expect(pinToLatest("petdex doctor")).toBe("npx petdex@latest doctor");
+    // A user might paste `petdex list` because they have it on
+    // PATH globally, and we still want the copy form to work for
+    // someone who does not.
+    expect(pinToLatest("petdex list")).toBe("npx petdex@latest list");
+    expect(pinToLatest("petdex install boba")).toBe(
+      "npx petdex@latest install boba",
+    );
   });
 
   test("leaves already-pinned commands alone", () => {
-    expect(pinToLatest("npx petdex@0.2.0 install desktop")).toBe(
-      "npx petdex@0.2.0 install desktop",
+    expect(pinToLatest("npx petdex@0.2.0 install boba")).toBe(
+      "npx petdex@0.2.0 install boba",
     );
-    expect(pinToLatest("npx petdex@latest install desktop")).toBe(
-      "npx petdex@latest install desktop",
+    expect(pinToLatest("npx petdex@latest install boba")).toBe(
+      "npx petdex@latest install boba",
     );
   });
 
@@ -56,17 +58,17 @@ describe("pinToLatest", () => {
 
   test("handles leading whitespace / cd prefix", () => {
     // `cd path && npx petdex install` — still pin the petdex.
-    expect(pinToLatest("cd ~/work && npx petdex install desktop")).toBe(
-      "cd ~/work && npx petdex@latest install desktop",
+    expect(pinToLatest("cd ~/work && npx petdex install boba")).toBe(
+      "cd ~/work && npx petdex@latest install boba",
     );
   });
 
   test("pins every petdex command in chained setup snippets", () => {
-    expect(pinToLatest("npx petdex init && npx petdex install boba")).toBe(
-      "npx petdex@latest init && npx petdex@latest install boba",
+    expect(pinToLatest("npx petdex login && npx petdex install boba")).toBe(
+      "npx petdex@latest login && npx petdex@latest install boba",
     );
-    expect(pinToLatest("petdex init && petdex install boba")).toBe(
-      "npx petdex@latest init && npx petdex@latest install boba",
+    expect(pinToLatest("petdex login && petdex install boba")).toBe(
+      "npx petdex@latest login && npx petdex@latest install boba",
     );
   });
 

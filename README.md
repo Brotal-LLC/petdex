@@ -51,25 +51,17 @@ Follow this checklist to get a pet installed, visible in Codex, and connected to
 npx petdex install boba
 ```
 
-You should see `~/.codex/pets/boba/` with `pet.json` and a spritesheet.
+You should see `~/.petdex/pets/boba/` with `pet.json` and a spritesheet.
 
-2. Initialize Petdex Desktop and agent hooks:
+2. Get the desktop app from [petdex.dev/download](https://petdex.dev/download). It
+   runs on macOS, Linux and Windows.
 
-```sh
-npx petdex init
-```
+3. Open it, then hit <kbd>Cmd</kbd>+<kbd>,</kbd> over the pet to open Settings.
+   Pick your pet under **Pets**, and connect your coding agents under **Agents**
+   with one click each. No terminal involved.
 
-This downloads the desktop app, starts it, and wires supported agents for `/petdex`.
-
-3. Open Codex, go to **Settings → Appearance → Pets**, choose **Boba**, and click **Select**. Use `/pet` inside Codex to wake the pet or tuck it away.
-
-4. Verify the setup:
-
-```sh
-npx petdex doctor
-```
-
-If hooks are installed, you can also type `/petdex status` inside a supported agent.
+The pet floats above your workspace and animates on every tool call your agent
+makes.
 
 ## For users
 
@@ -77,8 +69,8 @@ If hooks are installed, you can also type `/petdex status` inside a supported ag
 | --- | --- |
 | Browse pets | Visit [petdex.dev](https://petdex.dev) |
 | Install a pet | `npx petdex install <slug>` |
-| Switch active mascot | `npx petdex select` (interactive picker) or `npx petdex select <slug>` |
-| Run the desktop floater | `npx petdex init` (downloads the `.dmg` and wires Codex/Claude Code hooks) |
+| Switch active mascot | Open Settings in the desktop app (<kbd>Cmd</kbd>+<kbd>,</kbd>) |
+| Run the desktop floater | Download it from [petdex.dev/download](https://petdex.dev/download) |
 | Make a pet | Use the `hatch-pet` skill inside Codex, or build one with the [Petdex creator tools](https://petdex.dev/create) |
 | Submit a pet | `npx petdex submit ./my-pet/` or drop it through the web submitter |
 | Join the community | [Discord](https://discord.gg/byhubdyBTe) |

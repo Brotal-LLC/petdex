@@ -299,7 +299,7 @@ fn route(server: *Server, conn: *Conn, method: []const u8, path: []const u8, hea
     }
     if (post and (std.mem.eql(u8, path, "/update") or std.mem.eql(u8, path, "/update/handoff"))) {
         if (!tokenOk(server, head)) return respond(conn, 401, "{\"ok\":false,\"error\":\"unauthorized\"}");
-        return respond(conn, 409, "{\"ok\":false,\"error\":\"unsupported_install\",\"message\":\"Self-update lands in a later slice; run petdex update from a terminal.\"}");
+        return respond(conn, 409, "{\"ok\":false,\"error\":\"unsupported_install\",\"message\":\"Self-update lands in a later slice; download the current build from petdex.dev/download.\"}");
     }
 
     if (post and std.mem.eql(u8, path, "/state")) {
