@@ -3,15 +3,56 @@ import { describe, expect, it } from "bun:test";
 import { buildCodexInstallUrl } from "@/lib/codex-desktop-link";
 
 describe("buildCodexInstallUrl", () => {
-  it("builds the install link OpenAI's JSON-LD advertises", () => {
+  it("builds the install link ChatGPT.app's own parser accepts", () => {
     const url = buildCodexInstallUrl({
       displayName: "Boba",
       description: "A calm companion.",
       spritesheetUrl: "https://cdn.petdex.dev/pets/boba/spritesheet.png",
     });
     expect(url).toBe(
-      "codex://pets/install?name=Boba&description=A+calm+companion.&imageUrl=https%3A%2F%2Fcdn.petdex.dev%2Fpets%2Fboba%2Fspritesheet.png",
+      "codex://pets/install?name=Boba&description=A+calm+companion.&imageUrl=https%3A%2F%2Fcdn.petdex.dev%2Fpets%2Fboba%2Fspritesheet.png&spriteVersionNumber=2",
     );
+  });
+
+  // The parser walks every search param and rejects the whole URL on the
+  // first one outside its allowlist, so an extra parameter is not ignored
+  // -- it voids the install.
+  it("sends only the four parameters the parser allows", () => {
+    const url = buildCodexInstallUrl({
+      displayName: "Boba",
+      description: "A calm companion.",
+      spritesheetUrl: "https://cdn.petdex.dev/pets/boba/spritesheet.png",
+    });
+    expect([...new URL(url).searchParams.keys()].sort()).toEqual([
+      "description",
+      "imageUrl",
+      "name",
+      "spriteVersionNumber",
+    ]);
+  });
+
+  // Omitting it defaults the app to layout 1 and misreads every frame of a
+  // v2 atlas, which is what Petdex ships.
+  it("defaults the sprite version to the v2 atlas Petdex serves", () => {
+    const url = buildCodexInstallUrl({
+      displayName: "Boba",
+      description: "x",
+      spritesheetUrl: "https://cdn.petdex.dev/pets/boba/spritesheet.webp",
+    });
+    expect(new URL(url).searchParams.get("spriteVersionNumber")).toBe("2");
+  });
+
+  it("keeps the host and path the parser switches on", () => {
+    const url = new URL(
+      buildCodexInstallUrl({
+        displayName: "Boba",
+        description: "x",
+        spritesheetUrl: "https://cdn.petdex.dev/pets/boba/spritesheet.webp",
+      }),
+    );
+    expect(url.protocol).toBe("codex:");
+    expect(url.host).toBe("pets");
+    expect(url.pathname.split("/").filter(Boolean)).toEqual(["install"]);
   });
 
   it("escapes ampersands so a crafted name cannot inject a parameter", () => {

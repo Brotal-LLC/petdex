@@ -26,25 +26,43 @@ export type CodexInstallPet = {
   displayName: string;
   description: string;
   spritesheetUrl: string;
+  /** Atlas layout, 1 or 2. Petdex ships v2 sheets; see the note below. */
+  spriteVersionNumber?: 1 | 2;
 };
 
 /**
- * `codex://pets/install?name=…&description=…&imageUrl=…`
+ * `codex://pets/install?name=…&description=…&imageUrl=…&spriteVersionNumber=…`
  *
- * The shape is OpenAI's, read off the JSON-LD `InstallAction` that
- * chatgpt.com/s/sharepet_<id> publishes for its own shared pets. It is not a
- * documented contract, so treat a dead link as expected breakage and always
- * offer the petdex:// path beside it — see openCodexDeepLink.
+ * The shape was read out of ChatGPT.app's own bundle rather than inferred:
+ * see `docs/chatgpt-pet-integration.md` for the parser, the file it lives in,
+ * and how to re-derive all of this when OpenAI ships an update.
+ *
+ * Four rules from that parser, each of which silently voids the link:
+ *   - the host must be `pets` and the single path segment `install`
+ *   - only these four parameters are allowed; ONE extra rejects the whole URL
+ *   - `imageUrl` must be `https:`
+ *   - `spriteVersionNumber` must parse to 1 or 2
  *
  * `imageUrl` is a plain spritesheet URL, which is the whole reason this works:
- * Codex Desktop accepts any host, so a pet served from Petdex R2 installs the
- * same way one served from OpenAI does.
+ * the app accepts any host, so a pet served from Petdex R2 installs the same
+ * way one served from OpenAI does. Its downloader passes `redirect: "manual"`
+ * and throws on a redirect status, so the URL has to answer 200 directly, as
+ * `image/png` or `image/webp`, under 20MB.
+ *
+ * Sending it is still not the same as it working: the modal that consumes the
+ * link sits behind a Statsig gate that is currently off, so a correct link
+ * lands and nothing happens. Always offer the petdex:// path beside it — see
+ * openCodexDeepLink.
  */
 export function buildCodexInstallUrl(pet: CodexInstallPet): string {
   const query = new URLSearchParams({
     name: pet.displayName,
     description: pet.description,
     imageUrl: pet.spritesheetUrl,
+    // Petdex atlases are the v2 layout (8x11 grid, 9 state rows), the same
+    // one ChatGPT's own shared pets use. Omitting this defaults the app to 1
+    // and misreads every frame.
+    spriteVersionNumber: String(pet.spriteVersionNumber ?? 2),
   });
   return `codex://pets/install?${query.toString()}`;
 }
