@@ -148,14 +148,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: petdex-desktop-native-${{ matrix.target }}
-          # One glob for three shapes: a .zip on macOS, a bare ELF on
-          # Linux, an .exe on Windows. Only one exists per job.
+          # One glob for several shapes: a bare ELF on Linux, an .exe on
+          # Windows, plus the Linux tarball that carries the .desktop
+          # entry. Only the ones its own job produced exist per target.
           path: |
             packages/petdex-desktop-native/petdex-desktop-native-${{ matrix.target }}
             packages/petdex-desktop-native/petdex-desktop-native-${{ matrix.target }}.zip
             packages/petdex-desktop-native/petdex-desktop-native-${{ matrix.target }}.exe
             packages/petdex-desktop-native/petdex-desktop-${{ matrix.target }}
             packages/petdex-desktop-native/petdex-desktop-${{ matrix.target }}.exe
+            packages/petdex-desktop-native/petdex-desktop-native-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
   release:
