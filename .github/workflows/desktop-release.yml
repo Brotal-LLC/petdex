@@ -18,8 +18,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: darwin-arm64
-            runner: macos-14
+          # No macOS leg. Its bundle is signed and notarized from a
+          # workstation with the Developer ID in its keychain, and an
+          # adhoc-signed one is rejected by Gatekeeper on every Mac but
+          # the builder -- which is how v0.3.0 first shipped. A job that
+          # only ever fails on purpose is worse than no job: `needs`
+          # treats the failure as real and skips publishing, so 0.3.1
+          # built both other targets and released nothing.
+          # Run scripts/sign-macos.sh, then upload its output to the tag.
           - target: linux-x64
             runner: ubuntu-latest
           - target: win32-x64
@@ -90,28 +96,6 @@ jobs:
         run: |
           "$NATIVE_CLI" build
           ls -lh zig-out/bin/
-
-      - name: Package the app bundle (macOS)
-        # Only macOS gets a bundle: the .app layout is what Finder needs
-        # to treat the binary as an application. Linux and Windows ship
-        # the executable itself, which is self-contained (agent logos and
-        # the state table are compiled in).
-        if: matrix.target == 'darwin-arm64'
-        working-directory: packages/petdex-desktop-native
-        shell: bash
-        run: |
-          # Adhoc signing produces a bundle Gatekeeper rejects on every
-          # Mac except the one that built it, which is how v0.3.0 first
-          # shipped: "Apple could not verify this app is free of
-          # malware". Signing and notarization are still done from a
-          # workstation with the Developer ID in its keychain, so this
-          # job refuses to build the macOS artifact rather than publish
-          # one nobody can open.
-          echo "macOS artifacts are signed and notarized from a workstation." >&2
-          echo "Run: scripts/sign-macos.sh, then upload the zip to the release." >&2
-          exit 1
-          chmod +x "petdex-desktop-${{ matrix.target }}"
-          ls -lh "petdex-desktop-native-${{ matrix.target }}.zip" "petdex-desktop-${{ matrix.target }}"
 
       - name: Stage the binary (Linux)
         if: matrix.target == 'linux-x64'
