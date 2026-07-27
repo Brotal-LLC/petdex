@@ -1,5 +1,11 @@
-/** macOS desktop detection + petdex:// deep link builders for Petdex Desktop. */
+/** petdex:// deep link builders for Petdex Desktop. */
 
+/**
+ * No caller left: the deep link works on every desktop host now, so the
+ * two components that gated on this use `usePlatform` from
+ * `@/lib/use-platform`, which also buckets phones and tablets away.
+ * Kept because `codex-desktop-link.ts` still describes its behavior.
+ */
 export function isMacDesktop(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent ?? "";

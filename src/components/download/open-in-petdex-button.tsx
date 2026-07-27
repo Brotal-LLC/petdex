@@ -2,16 +2,15 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
 
 import { ArrowRight } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 
 import {
   buildPetdexActivateUrl,
-  isMacDesktop,
   openPetdexDeepLink,
 } from "@/lib/petdex-desktop-link";
+import { usePlatform } from "@/lib/use-platform";
 
 type OpenInPetdexButtonProps = {
   slug: string;
@@ -37,17 +36,17 @@ type OpenInPetdexButtonProps = {
  *   that would dead-end at a binary they can't install.
  */
 export function OpenInPetdexButton({ slug }: OpenInPetdexButtonProps) {
-  const [mounted, setMounted] = useState(false);
-  const [isMac, setIsMac] = useState(false);
   const t = useTranslations("openInPetdex");
   const locale = useLocale();
+  const platform = usePlatform();
+  const isDesktop =
+    platform === "macos" || platform === "linux" || platform === "windows";
 
-  useEffect(() => {
-    setMounted(true);
-    setIsMac(isMacDesktop());
-  }, []);
-
-  if (!mounted || !isMac) return null;
+  // usePlatform resolves to "unknown" during SSR and first paint, which
+  // keeps this null until hydration the way the old mounted flag did.
+  // Phones and tablets stay excluded: no build runs there, so the button
+  // would dead-end at a binary they cannot install.
+  if (!isDesktop) return null;
 
   const downloadHref = `/${locale}/download?next=${encodeURIComponent(`install/${slug}`)}`;
   const deepLink = buildPetdexActivateUrl(slug);

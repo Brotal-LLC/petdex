@@ -17,9 +17,9 @@ import { useLocale, useTranslations } from "next-intl";
 import {
   buildDownloadInstallNext,
   buildPetdexInstallUrl,
-  isMacDesktop,
   openPetdexDeepLink,
 } from "@/lib/petdex-desktop-link";
+import { usePlatform } from "@/lib/use-platform";
 
 import { CodexLogo } from "@/components/download/codex-logo";
 import {
@@ -55,11 +55,12 @@ export function CollectionActionMenu({ collection }: Props) {
   const t = useTranslations("collectionActionMenu");
   const locale = useLocale();
   const [copied, setCopied] = useState<Copied>(null);
-  const [isMac, setIsMac] = useState(false);
-
-  useEffect(() => {
-    setIsMac(isMacDesktop());
-  }, []);
+  const platform = usePlatform();
+  // Every desktop host answers petdex:// now, so the batch-install entry
+  // is no longer macOS-only. Phones and tablets stay out: usePlatform
+  // buckets them separately and no build runs there.
+  const isDesktop =
+    platform === "macos" || platform === "linux" || platform === "windows";
 
   // Auto-clear the copied affordance so a user reopening the menu later
   // does not see a stale checkmark.
@@ -121,7 +122,7 @@ export function CollectionActionMenu({ collection }: Props) {
               {collection.title}
             </DropdownMenuLabel>
           </DropdownMenuGroup>
-          {slugs.length > 0 && isMac ? (
+          {slugs.length > 0 && isDesktop ? (
             <DropdownMenuItem
               render={
                 // biome-ignore lint/a11y/useAnchorContent: content injected by the render prop
