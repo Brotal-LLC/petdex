@@ -4,7 +4,8 @@
  * a human bubble via templates, POSTs to the sidecar.
  *
  * Hot path: this runs 20-50× per active session. We:
- *   - exit fast on killswitch (no token read, no fetch, no parse)
+ *   - retain a bounded stdin prefix while draining the rest, so oversized
+ *     payloads cannot OOM us or make their writer hit a broken pipe
  *   - swallow ALL errors silently (a noisy hook stains the agent UI)
  *   - cap stdin reads at 64KB (hooks don't need bigger payloads, and
  *     a runaway upstream shouldn't OOM us)
@@ -31,6 +32,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { Readable } from "node:stream";
 
 import { type BubbleEvent, formatBubble } from "./bubble-templates";
 
@@ -175,6 +177,37 @@ function safeSessionId(raw: unknown): string | null {
   return /^[a-zA-Z0-9_-]{1,64}$/.test(raw) ? raw : null;
 }
 
+type HookStdin = Readable & { isTTY?: boolean };
+
+function requiredUtf8ContinuationBytes(byte: number): number | null {
+  if (byte <= 0x7f) return 0;
+  if (byte >= 0xc2 && byte <= 0xdf) return 1;
+  if (byte >= 0xe0 && byte <= 0xef) return 2;
+  if (byte >= 0xf0 && byte <= 0xf4) return 3;
+  return null;
+}
+
+function completeUtf8PrefixLength(prefix: Buffer): number {
+  let leadIndex = prefix.length - 1;
+  while (leadIndex >= 0 && (prefix[leadIndex] & 0b1100_0000) === 0b1000_0000) {
+    leadIndex -= 1;
+  }
+
+  if (leadIndex < 0) return prefix.length;
+
+  const requiredContinuations = requiredUtf8ContinuationBytes(
+    prefix[leadIndex],
+  );
+  const actualContinuations = prefix.length - leadIndex - 1;
+  if (
+    requiredContinuations !== null &&
+    actualContinuations < requiredContinuations
+  ) {
+    return leadIndex;
+  }
+  return prefix.length;
+}
+
 /**
  * Map a hook phase + tool to the sprite state we want.
  * Mirrors the matchers in agents.ts so the hook command is a single
@@ -203,25 +236,43 @@ export function stateForEvent(
   return null;
 }
 
-async function readStdin(): Promise<string> {
-  // Drain stdin up to STDIN_CAP. Hooks pipe a single JSON payload, so
-  // we don't need streaming semantics — we just need a bounded read.
-  if (process.stdin.isTTY) return "";
+export async function readStdin(
+  input: HookStdin = process.stdin,
+): Promise<string> {
+  // Hooks pipe a single JSON payload. Preserve at most STDIN_CAP bytes for
+  // parsing, but keep draining until EOF or an input error. Returning early
+  // closes the read end of the pipe and can make a host that is still writing
+  // report EPIPE. The generated agent hook timeout bounds the process itself.
+  if (input.isTTY) return Promise.resolve("");
   return await new Promise((resolve) => {
-    let buf = "";
-    let truncated = false;
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
-      if (truncated) return;
-      if (buf.length + chunk.length > STDIN_CAP) {
-        buf += chunk.slice(0, STDIN_CAP - buf.length);
-        truncated = true;
-        return;
-      }
-      buf += chunk;
-    });
-    process.stdin.on("end", () => resolve(buf));
-    process.stdin.on("error", () => resolve(buf));
+    const prefix: Buffer[] = [];
+    let prefixBytes = 0;
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      input.off("data", onData);
+      input.off("end", finish);
+      input.off("error", finish);
+      const retained = Buffer.concat(prefix, prefixBytes);
+      resolve(retained.toString("utf8", 0, completeUtf8PrefixLength(retained)));
+    };
+
+    const onData = (chunk: Buffer | string) => {
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const remaining = STDIN_CAP - prefixBytes;
+      if (remaining <= 0) return;
+      const retained = Buffer.from(bytes.subarray(0, remaining));
+      prefix.push(retained);
+      prefixBytes += retained.length;
+    };
+
+    input.on("data", onData);
+    input.on("end", finish);
+    input.on("error", finish);
+    input.resume();
   });
 }
 
@@ -359,16 +410,21 @@ async function postJson(
 }
 
 export async function runBubble(args: string[]): Promise<void> {
-  // Killswitch check FIRST — even before stdin drain — so a disabled
-  // state has minimal cost. existsSync is one stat call.
-  if (existsSync(KILLSWITCH_PATH)) return;
+  // Start consuming stdin before checking the killswitch. Hook hosts can
+  // write their payload immediately after spawning us; returning before the
+  // reader attaches turns that write into EPIPE/Broken pipe.
+  const stdinPromise = readStdin();
+  if (existsSync(KILLSWITCH_PATH)) {
+    await stdinPromise;
+    return;
+  }
 
   // The agentSource is also passed as the second arg
   // (`petdex bubble pre claude-code`) so we know it without parsing
   // stdin if stdin is empty (e.g. session.end events from Stop).
   const argSource = args[1] ?? null;
 
-  const stdin = await readStdin();
+  const stdin = await stdinPromise;
   const event = eventFromArgs(args, stdin);
   if (!event) return;
 
