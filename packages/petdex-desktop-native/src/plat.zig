@@ -261,9 +261,17 @@ pub fn replaceSymlink(target: []const u8, link: []const u8) bool {
 
 /// Own pid, for the /whoami endpoint. std has no portable accessor in
 /// 0.16, so this is the one genuine per-platform branch in this file.
+///
+/// Linux goes through the raw syscall rather than libc: `std.c.getpid`
+/// is an `extern "c"` declaration, and Linux refuses to compile one
+/// unless the build links libc explicitly. The app binary does, but
+/// `native test` also builds an analysis object that does not, so the
+/// libc path failed the Linux leg of CI while compiling fine on macOS
+/// and Windows. The syscall needs no linkage and returns the same pid.
 pub fn processId() u32 {
     return switch (builtin.os.tag) {
         .windows => std.os.windows.GetCurrentProcessId(),
+        .linux => @intCast(std.os.linux.getpid()),
         else => @intCast(std.c.getpid()),
     };
 }
@@ -343,8 +351,6 @@ pub fn setLaunchAtLogin(enabled: bool) bool {
     return @as(MsgSendErr, @ptrCast(&AppleApp.objc_msgSend))(svc, sel, null);
 }
 
-extern "c" fn kill(pid: c_int, sig: c_int) c_int;
-
 /// Quit the way a menu quit would. SIGTERM rides the hosts'
 /// graceful-shutdown paths (the macOS host turns it into `NSApp
 /// terminate` through a dispatch source, sealing journals on the way
@@ -356,11 +362,18 @@ extern "c" fn kill(pid: c_int, sig: c_int) c_int;
 /// process is `pthread_kill(self)`, which the source never observes
 /// (verified: an external `kill -TERM` quit the app, an in-process
 /// `raise` was silently dropped).
+///
+/// Both branches avoid libc for the same reason `processId` does: the
+/// analysis object `native test` builds does not link it. Linux sends
+/// the signal through the raw syscall, and Windows exits through
+/// `std.process.exit` (`RtlExitUserProcess` underneath) since
+/// `kernel32.ExitProcess` is not declared in Zig 0.16's std.
 pub fn requestQuit() void {
-    if (builtin.os.tag == .windows) {
-        std.os.windows.kernel32.ExitProcess(0);
+    switch (builtin.os.tag) {
+        .windows => std.process.exit(0),
+        .linux => _ = std.os.linux.kill(@intCast(processId()), .TERM),
+        else => _ = std.c.kill(@intCast(processId()), .TERM),
     }
-    _ = kill(@intCast(processId()), 15); // SIGTERM
 }
 
 /// Open a URL or a folder in the desktop's default handler. One
