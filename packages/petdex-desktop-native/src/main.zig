@@ -134,6 +134,7 @@ pub const Msg = union(enum) {
     toggle_waiting_sound,
     chime_done: native_sdk.EffectExit,
     set_bubble_text_size: f32,
+    bubble_lifetime_input: canvas.TextInputEvent,
     toggle_hide_dock,
     toggle_launch_at_login,
     toggle_focus_mode,
@@ -211,6 +212,14 @@ pub const Model = struct {
     /// fixed 13 (the `.sm` rung); this keeps 13 as the floor and lets
     /// the settings slider raise it to 20.
     bubble_text_px: f32 = bubble_text_min_px,
+    /// Seconds a completed (non-busy) bubble remains visible. Zero
+    /// disables automatic expiry.
+    bubble_lifetime_secs: f32 = bubble_lifetime_default_secs,
+    bubble_lifetime_text: [2]u8 = .{ '0', 0 },
+    bubble_lifetime_text_len: usize = 1,
+    /// Absolute wall-clock deadline; negative while hidden, busy, or
+    /// configured to remain visible indefinitely.
+    bubble_expires_at_ms: i64 = -1,
     /// macOS: run as a menu-bar app — no Dock icon, no app switcher
     /// entry. The status item stays either way, so Settings and Quit
     /// never lose their handle. Off by default.
@@ -829,7 +838,7 @@ fn saveSettings(model: *const Model) void {
     // Headroom check (a bufPrint overflow here fails silently and
     // drops the whole save): worst case with a 63-char slug, every
     // field present and negative coordinates is ~255 bytes.
-    var buf: [384]u8 = undefined;
+    var buf: [448]u8 = undefined;
     const active = if (model.active_pet < catalog_len) catalog[model.active_pet].slice() else "";
     // The position keys only exist once the window has been fitted and
     // read: a save fired on the very first frame would otherwise
@@ -840,8 +849,34 @@ fn saveSettings(model: *const Model) void {
         std.fmt.bufPrint(&pos_buf, ",\"pet_x\":{d:.0},\"pet_y\":{d:.0}", .{ model.pet_x, model.pet_y }) catch ""
     else
         "";
-    const json = std.fmt.bufPrint(&buf, "{{\"active_pet\":\"{s}\",\"scale\":{d:.2},\"bubbles\":{},\"waiting_sound\":{},\"bubble_text\":{d:.1},\"hide_dock\":{},\"rotate_pets\":{},\"rotation_day\":{d}{s},\"agents_prompted\":{}}}", .{ active, model.scale, model.bubbles_enabled, model.waiting_sound, model.bubble_text_px, model.hide_dock, model.rotate_pets, model.rotation_day, pos, model.agents_prompted }) catch return;
+    const json = std.fmt.bufPrint(&buf, "{{\"active_pet\":\"{s}\",\"scale\":{d:.2},\"bubbles\":{},\"waiting_sound\":{},\"bubble_text\":{d:.1},\"bubble_lifetime\":{d:.0},\"hide_dock\":{},\"rotate_pets\":{},\"rotation_day\":{d}{s},\"agents_prompted\":{}}}", .{ active, model.scale, model.bubbles_enabled, model.waiting_sound, model.bubble_text_px, model.bubble_lifetime_secs, model.hide_dock, model.rotate_pets, model.rotation_day, pos, model.agents_prompted }) catch return;
     cWriteFile(path, json);
+}
+
+fn setUnsignedText(buffer: []u8, length: *usize, value: u16) void {
+    const text = std.fmt.bufPrint(buffer, "{}", .{value}) catch return;
+    length.* = text.len;
+}
+
+fn editUnsignedText(buffer: []u8, length: *usize, edit: canvas.TextInputEvent, min_value: u16, max_value: u16) ?u16 {
+    switch (edit) {
+        .insert_text => |text| {
+            for (text) |byte| {
+                if (!std.ascii.isDigit(byte) or length.* >= buffer.len) continue;
+                buffer[length.*] = byte;
+                length.* += 1;
+            }
+        },
+        .delete_backward, .delete_word_backward => {
+            if (length.* > 0) length.* -= 1;
+        },
+        .clear => length.* = 0,
+        else => {},
+    }
+    if (length.* == 0) return null;
+    const value = std.fmt.parseInt(u16, buffer[0..length.*], 10) catch return null;
+    if (value < min_value or value > max_value) return null;
+    return value;
 }
 
 /// Read a pet's encoded sheet bytes into `buf`. Prefers pet.json's
@@ -939,6 +974,7 @@ var initial_pet: u32 = 0;
 var initial_bubbles: bool = true;
 var initial_waiting_sound: bool = false;
 var initial_bubble_text_px: f32 = bubble_text_min_px;
+var initial_bubble_lifetime_secs: f32 = bubble_lifetime_default_secs;
 var initial_hide_dock: bool = false;
 var initial_rotate_pets: bool = false;
 var initial_rotation_day: u32 = 0;
@@ -1123,6 +1159,9 @@ fn resolveInitialPet(io: std.Io, allocator: std.mem.Allocator, environ_map: *std
             }
             if (hook_server.jsonNumberPub(json, "bubble_text")) |v| {
                 if (v >= bubble_text_min_px and v <= bubble_text_max_px) initial_bubble_text_px = @floatCast(v);
+            }
+            if (hook_server.jsonNumberPub(json, "bubble_lifetime")) |v| {
+                initial_bubble_lifetime_secs = clampBubbleLifetime(@floatCast(v));
             }
             if (hook_server.jsonStringPub(json, "bubbles")) |_| {} else if (std.mem.indexOf(u8, json, "\"bubbles\":false") != null) {
                 initial_bubbles = false;
@@ -1319,6 +1358,8 @@ pub fn boot(model: *Model, fx: *Effects) void {
     model.bubbles_enabled = initial_bubbles;
     model.waiting_sound = initial_waiting_sound;
     model.bubble_text_px = initial_bubble_text_px;
+    model.bubble_lifetime_secs = initial_bubble_lifetime_secs;
+    setUnsignedText(model.bubble_lifetime_text[0..], &model.bubble_lifetime_text_len, @intFromFloat(model.bubble_lifetime_secs));
     model.agents_prompted = initial_agents_prompted;
     model.hide_dock = initial_hide_dock;
     model.rotate_pets = initial_rotate_pets;
@@ -1551,6 +1592,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .toggle_bubbles => {
             model.bubbles_enabled = !model.bubbles_enabled;
+            if (!model.bubbles_enabled) clearBubble(model);
             saveSettings(model);
         },
         .toggle_waiting_sound => {
@@ -1566,6 +1608,15 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.bubble_text_px = bubble_text_min_px + fraction * (bubble_text_max_px - bubble_text_min_px);
             saveSettings(model);
         },
+        .bubble_lifetime_input => |edit| {
+            if (editUnsignedText(model.bubble_lifetime_text[0..], &model.bubble_lifetime_text_len, edit, 0, 60)) |value| {
+                model.bubble_lifetime_secs = @floatFromInt(value);
+                if (model.bubble.text_len > 0 and !model.bubble.busy) {
+                    model.bubble_expires_at_ms = bubbleDeadlineMs(fx.wallMs(), model.bubble_lifetime_secs);
+                }
+                saveSettings(model);
+            }
+        },
         .toggle_hide_dock => {
             model.hide_dock = !model.hide_dock;
             plat.setDockIconHidden(model.hide_dock);
@@ -1577,7 +1628,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // field): reflect the status query, not the wish.
             model.launch_at_login = plat.launchAtLoginEnabled();
         },
-        .toggle_focus_mode => model.focus_mode = !model.focus_mode,
+        .toggle_focus_mode => {
+            model.focus_mode = !model.focus_mode;
+            if (model.focus_mode) clearBubble(model);
+        },
         .toggle_rotate_pets => {
             model.rotate_pets = !model.rotate_pets;
             // Enabling never swaps on the spot: the pet on screen
@@ -1781,13 +1835,19 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             drainPendingInstall(model, fx);
             if (!model.sheet_loaded) return;
             if (model.settings_open and thumbs_built < catalog_len) buildNextThumb(fx);
+            const now = fx.wallMs();
             if (hook_server.mailbox.takeBubble(&model.bubble)) {
-                if (model.bubble.text_len > 0) {
+                if (!model.bubbles_enabled or model.focus_mode or model.bubble.text_len == 0) {
+                    clearBubble(model);
+                } else {
                     loadAgentAvatar(model.bubble.agent[0..model.bubble.agent_len], model.dark, fx);
                     registerTail(model.dark, fx);
+                    model.bubble_expires_at_ms = bubbleExpiryMs(now, model.bubble_lifetime_secs, model.bubble.busy);
                 }
             }
-            const now = fx.wallMs();
+            if (bubbleLifetimeExpired(model.bubble_expires_at_ms, now, model.state)) {
+                clearBubble(model);
+            }
             if (model.waiting_sound and shouldEscalate(model.state, model.waiting_since_ms, model.waiting_escalated, now)) {
                 model.waiting_escalated = true;
                 playWaitingChime(fx);
@@ -1867,6 +1927,27 @@ const bubble_card_pad: f32 = 12;
 /// honest lines plus avatar and padding without clipping.
 const bubble_text_min_px: f32 = 13;
 const bubble_text_max_px: f32 = 20;
+const bubble_lifetime_default_secs: f32 = 0;
+const bubble_lifetime_min_secs: f32 = 0;
+const bubble_lifetime_max_secs: f32 = 60;
+
+fn clampBubbleLifetime(value: f32) f32 {
+    if (!std.math.isFinite(value)) return bubble_lifetime_default_secs;
+    return std.math.clamp(@round(value), bubble_lifetime_min_secs, bubble_lifetime_max_secs);
+}
+
+fn bubbleDeadlineMs(now_ms: i64, lifetime_secs: f32) i64 {
+    const seconds = clampBubbleLifetime(lifetime_secs);
+    return if (seconds == 0) -1 else now_ms + @as(i64, @intFromFloat(seconds * 1000));
+}
+
+fn bubbleExpiryMs(now_ms: i64, lifetime_secs: f32, busy: bool) i64 {
+    return if (busy) -1 else bubbleDeadlineMs(now_ms, lifetime_secs);
+}
+
+fn bubbleLifetimeExpired(deadline_ms: i64, now_ms: i64, state: State) bool {
+    return state != .waiting and deadline_ms >= 0 and now_ms >= deadline_ms;
+}
 
 /// Wrap budget at the current text size: the 26-char budget was tuned
 /// for 13pt over the same fixed card width, so it scales inversely
@@ -1948,6 +2029,11 @@ const tail_h_f: f32 = 9;
 
 fn bubbleActive(model: *const Model) bool {
     return model.bubbles_enabled and !model.focus_mode and model.bubble.text_len > 0;
+}
+
+fn clearBubble(model: *Model) void {
+    model.bubble = .{};
+    model.bubble_expires_at_ms = -1;
 }
 
 /// The window tracks exactly what is drawn: the sprite, plus a band
@@ -2041,8 +2127,21 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
         .semantics = .{ .label = "Agent avatar" },
     });
     avatar.widget.image_fit = .contain;
+    // Keep a stable trailing slot: active work animates the original
+    // spinner, while a waiting permission/input request shows a static
+    // marker without waking the frame loop or shifting the bubble text.
+    var waiting_marker = ui.text(.{ .size = .heading }, "!");
+    waiting_marker.widget.style.foreground = canvas.Color.rgb8(250, 170, 48);
     const spinner_slot = if (model.bubble.busy)
         ui.el(.spinner, .{ .width = 16, .height = 16, .semantics = .{ .label = "Working" } }, .{})
+    else if (model.state == .waiting)
+        ui.el(.stack, .{
+            .width = 16,
+            .height = 16,
+            .main = .center,
+            .cross = .center,
+            .semantics = .{ .label = "Approval or input required" },
+        }, .{waiting_marker})
     else
         ui.el(.stack, .{ .width = 16, .height = 16 }, .{});
 
@@ -2362,6 +2461,21 @@ fn settingsView(ui: *AppUi, model: *const Model) AppUi.Node {
         ui.el(.panel, .{ .style_tokens = .{ .background = .surface, .radius = .md } }, .{
             ui.row(.{ .padding = 12, .cross = .center, .gap = 12 }, .{
                 ui.column(.{ .grow = 1 }, .{
+                    ui.text(.{}, "Bubble lifetime"),
+                    ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "0 keeps bubbles visible; 1–60 seconds enables expiry"),
+                }),
+                ui.el(.input, .{
+                    .width = 72,
+                    .height = 34,
+                    .text = model.bubble_lifetime_text[0..model.bubble_lifetime_text_len],
+                    .on_input = AppUi.inputMsg(.bubble_lifetime_input),
+                    .semantics = .{ .label = "Bubble lifetime in seconds" },
+                }, .{}),
+            }),
+        }),
+        ui.el(.panel, .{ .style_tokens = .{ .background = .surface, .radius = .md } }, .{
+            ui.row(.{ .padding = 12, .cross = .center, .gap = 12 }, .{
+                ui.column(.{ .grow = 1 }, .{
                     ui.text(.{}, "Rotate pet daily"),
                     ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Wake up to a different pet each day"),
                 }),
@@ -2641,4 +2755,29 @@ test "epoch-day flips exactly at UTC midnight" {
     try std.testing.expectEqual(@as(u32, 1), dayFromWallMs(std.time.ms_per_day));
     // A real date (2026-07-29T12:00Z), so a unit slip cannot pass.
     try std.testing.expectEqual(@as(u32, 20663), dayFromWallMs(1785326400000));
+}
+
+test "bubble lifetime validates and produces a deadline" {
+    try std.testing.expectEqual(@as(f32, 0), clampBubbleLifetime(std.math.nan(f32)));
+    try std.testing.expectEqual(@as(f32, 0), clampBubbleLifetime(0));
+    try std.testing.expectEqual(@as(f32, 60), clampBubbleLifetime(90));
+    try std.testing.expectEqual(@as(f32, 6), clampBubbleLifetime(5.6));
+    try std.testing.expectEqual(@as(i64, -1), bubbleDeadlineMs(2000, 0));
+    try std.testing.expectEqual(@as(i64, 7000), bubbleDeadlineMs(2000, 5));
+    try std.testing.expectEqual(@as(i64, -1), bubbleExpiryMs(2000, 0, false));
+    try std.testing.expectEqual(@as(i64, -1), bubbleExpiryMs(2000, 5, true));
+    try std.testing.expectEqual(@as(i64, 7000), bubbleExpiryMs(2000, 5, false));
+    try std.testing.expect(!bubbleLifetimeExpired(7000, 8000, .waiting));
+    try std.testing.expect(bubbleLifetimeExpired(7000, 8000, .idle));
+}
+
+test "clearing a bubble also cancels its lifetime" {
+    var model: Model = .{};
+    model.bubble.text_len = 1;
+    model.bubble.busy = true;
+    model.bubble_expires_at_ms = 1234;
+    clearBubble(&model);
+    try std.testing.expectEqual(@as(usize, 0), model.bubble.text_len);
+    try std.testing.expect(!model.bubble.busy);
+    try std.testing.expectEqual(@as(i64, -1), model.bubble_expires_at_ms);
 }
