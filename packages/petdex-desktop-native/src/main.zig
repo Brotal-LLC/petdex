@@ -119,7 +119,6 @@ fn stateDef(state: State) StateDef {
 pub const Msg = union(enum) {
     frame_tick: native_sdk.EffectTimer,
     poll_tick: native_sdk.EffectTimer,
-    physics_tick: native_sdk.EffectTimer,
     frame_clock,
     cycle_state,
     open_settings,
@@ -135,6 +134,9 @@ pub const Msg = union(enum) {
     chime_done: native_sdk.EffectExit,
     set_bubble_text_size: f32,
     bubble_lifetime_input: canvas.TextInputEvent,
+    bubble_columns_input: canvas.TextInputEvent,
+    bubble_answer_lines_input: canvas.TextInputEvent,
+    font_path_input: canvas.TextInputEvent,
     toggle_hide_dock,
     toggle_launch_at_login,
     toggle_focus_mode,
@@ -220,6 +222,18 @@ pub const Model = struct {
     /// Absolute wall-clock deadline; negative while hidden, busy, or
     /// configured to remain visible indefinitely.
     bubble_expires_at_ms: i64 = -1,
+    /// Bubble layout is user-controlled on every platform: one title line
+    /// plus this many answer lines, each with the configured column budget.
+    bubble_columns: u16 = bubble_columns_default,
+    bubble_answer_lines: u8 = bubble_answer_lines_default,
+    bubble_columns_text: [4]u8 = .{ '4', '0', 0, 0 },
+    bubble_columns_text_len: usize = 2,
+    bubble_answer_lines_text: [2]u8 = .{ '2', 0 },
+    bubble_answer_lines_text_len: usize = 1,
+    font_path: [512]u8 = @splat(0),
+    font_path_len: usize = 0,
+    font_path_dirty: bool = false,
+    font_load_failed: bool = false,
     /// macOS: run as a menu-bar app — no Dock icon, no app switcher
     /// entry. The status item stays either way, so Settings and Quit
     /// never lose their handle. Off by default.
@@ -280,6 +294,7 @@ fn petdexTokens(model: *const Model) canvas.DesignTokens {
     // gives the bubble a real 13..20pt range while every other window
     // keeps stock type.
     tokens.typography.heading_size = model.bubble_text_px;
+    if (custom_font_active) tokens.typography.font_id = custom_font_id;
     if (model.high_contrast) return tokens;
     const c = &tokens.colors;
     if (model.dark) {
@@ -708,7 +723,6 @@ fn isTap(held_ms: i64, dx: f64, dy: f64) bool {
     return held_ms <= tap_max_ms and @abs(dx) < tap_slop_px and @abs(dy) < tap_slop_px;
 }
 
-const physics_timer_key: u64 = 3;
 const physics_tick_ms: u32 = 16;
 const physics_friction: f64 = 0.88;
 const physics_min_vel: f64 = 65;
@@ -732,11 +746,6 @@ fn armFrameTimer(model: *const Model, fx: *Effects) void {
 
 // ------------------------------------------------------------- pet loading
 
-const PetFile = struct {
-    name: []const u8,
-    sheet_path: []const u8,
-};
-
 /// Decoded atlas kept app-side: the runtime's image registry caps one
 /// image at 1MB of pixels and the platform decode scratch at 1.25MB,
 /// so a full sheet (11.5MB RGBA) can never ride registerImageBytes.
@@ -753,7 +762,6 @@ const Sheet = struct {
     rows: usize = 9,
 };
 var sheet: Sheet = .{};
-
 
 /// Scan the petdex pet roots for the first usable pet, honoring
 /// PETDEX_PET as a directory-name override. Returns the sheet bytes
@@ -823,6 +831,13 @@ fn settingsPath(buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "{s}/.petdex/desktop-native-settings.json", .{home}) catch null;
 }
 
+const custom_font_id: canvas.FontId = canvas.min_registered_font_id;
+const max_custom_font_bytes: usize = 24 * 1024 * 1024;
+var initial_font_path: [512]u8 = @splat(0);
+var initial_font_path_len: usize = 0;
+var initial_font_load_failed: bool = false;
+var custom_font_active: bool = false;
+
 /// Tiny file helpers usable from the runtime thread. They carry their
 /// own Io (see plat.zig), so the main thread's never leaks off-thread;
 /// the invariant is enforced by the type now, not by this comment.
@@ -832,13 +847,63 @@ fn cWriteFile(path: []const u8, bytes: []const u8) void {
     _ = plat.writeFile(path, bytes);
 }
 
+fn jsonEscapeString(value: []const u8, output: []u8) ?[]const u8 {
+    var len: usize = 0;
+    for (value) |byte| {
+        const escape: ?u8 = switch (byte) {
+            '"' => '"',
+            '\\' => '\\',
+            '\n' => 'n',
+            '\r' => 'r',
+            '\t' => 't',
+            else => null,
+        };
+        if (escape) |escaped| {
+            if (len + 2 > output.len) return null;
+            output[len] = '\\';
+            output[len + 1] = escaped;
+            len += 2;
+        } else {
+            if (len >= output.len) return null;
+            output[len] = byte;
+            len += 1;
+        }
+    }
+    return output[0..len];
+}
+
+fn jsonUnescapeString(value: []const u8, output: []u8) ?[]const u8 {
+    var input_index: usize = 0;
+    var len: usize = 0;
+    while (input_index < value.len) {
+        var byte = value[input_index];
+        input_index += 1;
+        if (byte == '\\') {
+            if (input_index >= value.len) return null;
+            byte = switch (value[input_index]) {
+                '"' => '"',
+                '\\' => '\\',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                else => return null,
+            };
+            input_index += 1;
+        }
+        if (len >= output.len) return null;
+        output[len] = byte;
+        len += 1;
+    }
+    return output[0..len];
+}
+
 fn saveSettings(model: *const Model) void {
     var path_buf: [512]u8 = undefined;
     const path = settingsPath(&path_buf) orelse return;
     // Headroom check (a bufPrint overflow here fails silently and
-    // drops the whole save): worst case with a 63-char slug, every
-    // field present and negative coordinates is ~255 bytes.
-    var buf: [448]u8 = undefined;
+    // drops the whole save): keep room for the configurable bubble
+    // fields, rotation state, a long slug, and negative coordinates.
+    var buf: [1536]u8 = undefined;
     const active = if (model.active_pet < catalog_len) catalog[model.active_pet].slice() else "";
     // The position keys only exist once the window has been fitted and
     // read: a save fired on the very first frame would otherwise
@@ -849,7 +914,10 @@ fn saveSettings(model: *const Model) void {
         std.fmt.bufPrint(&pos_buf, ",\"pet_x\":{d:.0},\"pet_y\":{d:.0}", .{ model.pet_x, model.pet_y }) catch ""
     else
         "";
-    const json = std.fmt.bufPrint(&buf, "{{\"active_pet\":\"{s}\",\"scale\":{d:.2},\"bubbles\":{},\"waiting_sound\":{},\"bubble_text\":{d:.1},\"bubble_lifetime\":{d:.0},\"hide_dock\":{},\"rotate_pets\":{},\"rotation_day\":{d}{s},\"agents_prompted\":{}}}", .{ active, model.scale, model.bubbles_enabled, model.waiting_sound, model.bubble_text_px, model.bubble_lifetime_secs, model.hide_dock, model.rotate_pets, model.rotation_day, pos, model.agents_prompted }) catch return;
+    var escaped_font_buf: [1024]u8 = undefined;
+    const font_path = std.mem.trim(u8, model.font_path[0..model.font_path_len], " \t\r\n");
+    const escaped_font = jsonEscapeString(font_path, &escaped_font_buf) orelse return;
+    const json = std.fmt.bufPrint(&buf, "{{\"active_pet\":\"{s}\",\"scale\":{d:.2},\"bubbles\":{},\"waiting_sound\":{},\"bubble_text\":{d:.1},\"bubble_lifetime\":{d:.0},\"bubble_columns\":{},\"bubble_answer_lines\":{},\"font_path\":\"{s}\",\"hide_dock\":{},\"rotate_pets\":{},\"rotation_day\":{d}{s},\"agents_prompted\":{}}}", .{ active, model.scale, model.bubbles_enabled, model.waiting_sound, model.bubble_text_px, model.bubble_lifetime_secs, model.bubble_columns, model.bubble_answer_lines, escaped_font, model.hide_dock, model.rotate_pets, model.rotation_day, pos, model.agents_prompted }) catch return;
     cWriteFile(path, json);
 }
 
@@ -877,6 +945,23 @@ fn editUnsignedText(buffer: []u8, length: *usize, edit: canvas.TextInputEvent, m
     const value = std.fmt.parseInt(u16, buffer[0..length.*], 10) catch return null;
     if (value < min_value or value > max_value) return null;
     return value;
+}
+
+fn editPathText(buffer: []u8, length: *usize, edit: canvas.TextInputEvent) void {
+    switch (edit) {
+        .insert_text => |text| {
+            const available = buffer.len - length.*;
+            const count = @min(available, text.len);
+            @memcpy(buffer[length.* .. length.* + count], text[0..count]);
+            length.* += count;
+        },
+        .delete_backward, .delete_word_backward => {
+            if (length.* > 0) length.* -= 1;
+            while (length.* > 0 and (buffer[length.*] & 0xC0) == 0x80) length.* -= 1;
+        },
+        .clear => length.* = 0,
+        else => {},
+    }
 }
 
 /// Read a pet's encoded sheet bytes into `buf`. Prefers pet.json's
@@ -975,6 +1060,8 @@ var initial_bubbles: bool = true;
 var initial_waiting_sound: bool = false;
 var initial_bubble_text_px: f32 = bubble_text_min_px;
 var initial_bubble_lifetime_secs: f32 = bubble_lifetime_default_secs;
+var initial_bubble_columns: u16 = bubble_columns_default;
+var initial_bubble_answer_lines: u8 = bubble_answer_lines_default;
 var initial_hide_dock: bool = false;
 var initial_rotate_pets: bool = false;
 var initial_rotation_day: u32 = 0;
@@ -994,7 +1081,6 @@ var initial_pet_y: ?f64 = null;
 const avatar_image_id: u64 = 13;
 const tail_image_id: u64 = 14;
 const agent_icon_ids = [agent_hooks.agent_count]u64{ 9, 10, 11, 15 };
-const agent_icon_px: usize = 40;
 var agents_icons_ready: bool = false;
 var agents_icons_dark: bool = false;
 
@@ -1162,6 +1248,17 @@ fn resolveInitialPet(io: std.Io, allocator: std.mem.Allocator, environ_map: *std
             }
             if (hook_server.jsonNumberPub(json, "bubble_lifetime")) |v| {
                 initial_bubble_lifetime_secs = clampBubbleLifetime(@floatCast(v));
+            }
+            if (hook_server.jsonNumberPub(json, "bubble_columns")) |v| {
+                if (v >= bubble_columns_min and v <= bubble_columns_max) initial_bubble_columns = @intFromFloat(v);
+            }
+            if (hook_server.jsonNumberPub(json, "bubble_answer_lines")) |v| {
+                if (v >= bubble_answer_lines_min and v <= bubble_answer_lines_max) initial_bubble_answer_lines = @intFromFloat(v);
+            }
+            if (hook_server.jsonStringPub(json, "font_path")) |encoded| {
+                if (jsonUnescapeString(encoded, &initial_font_path)) |value| {
+                    initial_font_path_len = value.len;
+                }
             }
             if (hook_server.jsonStringPub(json, "bubbles")) |_| {} else if (std.mem.indexOf(u8, json, "\"bubbles\":false") != null) {
                 initial_bubbles = false;
@@ -1360,6 +1457,13 @@ pub fn boot(model: *Model, fx: *Effects) void {
     model.bubble_text_px = initial_bubble_text_px;
     model.bubble_lifetime_secs = initial_bubble_lifetime_secs;
     setUnsignedText(model.bubble_lifetime_text[0..], &model.bubble_lifetime_text_len, @intFromFloat(model.bubble_lifetime_secs));
+    model.bubble_columns = initial_bubble_columns;
+    model.bubble_answer_lines = initial_bubble_answer_lines;
+    setUnsignedText(model.bubble_columns_text[0..], &model.bubble_columns_text_len, model.bubble_columns);
+    setUnsignedText(model.bubble_answer_lines_text[0..], &model.bubble_answer_lines_text_len, model.bubble_answer_lines);
+    @memcpy(model.font_path[0..initial_font_path_len], initial_font_path[0..initial_font_path_len]);
+    model.font_path_len = initial_font_path_len;
+    model.font_load_failed = initial_font_load_failed;
     model.agents_prompted = initial_agents_prompted;
     model.hide_dock = initial_hide_dock;
     model.rotate_pets = initial_rotate_pets;
@@ -1606,6 +1710,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .chime_done => {},
         .set_bubble_text_size => |fraction| {
             model.bubble_text_px = bubble_text_min_px + fraction * (bubble_text_max_px - bubble_text_min_px);
+            _ = fitWindow(model, fx);
             saveSettings(model);
         },
         .bubble_lifetime_input => |edit| {
@@ -1616,6 +1721,26 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 }
                 saveSettings(model);
             }
+        },
+        .bubble_columns_input => |edit| {
+            if (editUnsignedText(model.bubble_columns_text[0..], &model.bubble_columns_text_len, edit, bubble_columns_min, bubble_columns_max)) |value| {
+                model.bubble_columns = value;
+                _ = fitWindow(model, fx);
+                saveSettings(model);
+            }
+        },
+        .bubble_answer_lines_input => |edit| {
+            if (editUnsignedText(model.bubble_answer_lines_text[0..], &model.bubble_answer_lines_text_len, edit, bubble_answer_lines_min, bubble_answer_lines_max)) |value| {
+                model.bubble_answer_lines = @intCast(value);
+                _ = fitWindow(model, fx);
+                saveSettings(model);
+            }
+        },
+        .font_path_input => |edit| {
+            editPathText(model.font_path[0..], &model.font_path_len, edit);
+            model.font_path_dirty = true;
+            model.font_load_failed = false;
+            saveSettings(model);
         },
         .toggle_hide_dock => {
             model.hide_dock = !model.hide_dock;
@@ -1824,9 +1949,6 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.primary_was_down = read.primary_down;
         },
-        .physics_tick => |timer| {
-            _ = timer;
-        },
         .poll_tick => |timer| {
             if (timer.outcome != .fired) return;
             // Ahead of the sheet guard on purpose: a machine with no pet
@@ -1904,29 +2026,29 @@ pub fn onCommand(name: []const u8) ?Msg {
 
 pub const AppUi = canvas.Ui(Msg);
 
-
-
 const pet_menu = [_]AppUi.ContextMenuItem{
     .{ .label = "Open Settings", .msg = .open_settings },
     .{ .label = "Close Pet", .msg = .close_pet },
 };
 
-// The bubble lives in its OWN fixed-size window: floating,
-// transparent, click-through. Nothing is estimated — the window is a
-// constant, the card inside is intrinsic, and the surplus space is
-// crossable by clicks, so a misfit costs nothing anywhere.
-const bubble_window_w: f32 = 340;
-const bubble_window_h: f32 = 150;
-const bubble_text_w: f32 = 250;
-const bubble_base_chars_per_line: usize = 26;
-const bubble_max_lines: usize = 2;
-const bubble_card_pad: f32 = 12;
+// The visible card remains intrinsic and grows only with the text it actually
+// contains. These values size the surrounding transparent canvas generously
+// enough for the configured maximum; one full em per character also covers
+// CJK glyphs, unlike the previous 0.62 Latin-average estimate.
+const bubble_columns_default: u16 = 40;
+const bubble_columns_min: u16 = 8;
+const bubble_columns_max: u16 = 120;
+const bubble_answer_lines_default: u8 = 2;
+const bubble_answer_lines_min: u8 = 1;
+const bubble_answer_lines_max: u8 = 8;
+const bubble_avatar_width: f32 = 20;
+const bubble_busy_width: f32 = 16;
+const bubble_content_gap: f32 = 8;
+const bubble_card_padding: f32 = 12;
+const bubble_head_gap: f32 = 12;
+const bubble_line_gap: f32 = 2;
+const bubble_canvas_margin: f32 = 16;
 
-/// Bubble text size bounds. 13 is the `.sm` rung the bubble always
-/// rendered at; 20 is as far as the fixed 340x150 window carries four
-/// honest lines plus avatar and padding without clipping.
-const bubble_text_min_px: f32 = 13;
-const bubble_text_max_px: f32 = 20;
 const bubble_lifetime_default_secs: f32 = 0;
 const bubble_lifetime_min_secs: f32 = 0;
 const bubble_lifetime_max_secs: f32 = 60;
@@ -1949,14 +2071,34 @@ fn bubbleLifetimeExpired(deadline_ms: i64, now_ms: i64, state: State) bool {
     return state != .waiting and deadline_ms >= 0 and now_ms >= deadline_ms;
 }
 
-/// Wrap budget at the current text size: the 26-char budget was tuned
-/// for 13pt over the same fixed card width, so it scales inversely
-/// with the glyph size (bigger type, fewer columns). Floor of 10 keeps
-/// a word plus ellipsis viable even past the slider's max.
-fn bubbleCharsPerLine(text_px: f32) usize {
-    const scaled = @as(f32, @floatFromInt(bubble_base_chars_per_line)) * bubble_text_min_px / text_px;
-    return @max(10, @as(usize, @intFromFloat(@round(scaled))));
+fn bubbleMaxCardWidth(model: *const Model) f32 {
+    const text_capacity = @as(f32, @floatFromInt(model.bubble_columns)) * bubbleFontSize(model);
+    return @ceil(text_capacity + bubble_avatar_width + bubble_busy_width + bubble_content_gap * 2 + bubble_card_padding * 2);
 }
+
+fn bubbleMaxCardHeight(model: *const Model) f32 {
+    const rows = @as(f32, @floatFromInt(@as(u16, model.bubble_answer_lines) + 1));
+    const line_height = bubbleFontSize(model) * 1.35;
+    return @ceil(rows * line_height + (rows - 1) * bubble_line_gap + bubble_card_padding * 2);
+}
+
+fn bubbleWindowWidth(model: *const Model) f32 {
+    return bubbleMaxCardWidth(model) + bubble_canvas_margin * 2;
+}
+
+fn bubbleWindowHeight(model: *const Model) f32 {
+    return bubbleMaxCardHeight(model) + @as(f32, @floatFromInt(tail_h)) + bubble_head_gap + bubble_canvas_margin * 2;
+}
+
+fn bubbleFontSize(model: *const Model) f32 {
+    // Font size is an explicit user preference. The pet scale still controls
+    // the bubble geometry, but must not silently override this setting.
+    return std.math.clamp(model.bubble_text_px, bubble_text_min_px, bubble_text_max_px);
+}
+
+/// Bubble text size bounds shared by all desktop platforms.
+const bubble_text_min_px: f32 = 8;
+const bubble_text_max_px: f32 = 20;
 
 /// Count display characters (UTF-8 sequences, not bytes).
 fn charCount(text: []const u8) usize {
@@ -1972,9 +2114,9 @@ var bubble_text_scratch: [280]u8 = undefined;
 
 /// Clip to `max_chars` on a safe boundary: never mid UTF-8 sequence,
 /// never splitting a JSON escape, preferring the last word boundary
-/// within reach, with an ellipsis appended into `scratch` (globals:
+/// within reach, optionally appending an ellipsis into `scratch` (globals:
 /// the view's byte slices must outlive the frame build).
-fn clipDisplay(text: []const u8, max_chars: usize, scratch: []u8) []const u8 {
+fn clipDisplay(text: []const u8, max_chars: usize, scratch: []u8, append_ellipsis: bool) []const u8 {
     if (charCount(text) <= max_chars) return text;
     var n: usize = 0;
     var cut: usize = text.len;
@@ -1993,40 +2135,44 @@ fn clipDisplay(text: []const u8, max_chars: usize, scratch: []u8) []const u8 {
     var backslashes: usize = 0;
     while (cut > backslashes and text[cut - 1 - backslashes] == '\\') backslashes += 1;
     if (backslashes % 2 == 1) cut -= 1;
-    const ell = "\u{2026}";
+    const ell = if (append_ellipsis) "\u{2026}" else "";
     const total = @min(cut, scratch.len - ell.len);
     @memcpy(scratch[0..total], text[0..total]);
     @memcpy(scratch[total .. total + ell.len], ell);
     return scratch[0 .. total + ell.len];
 }
 
-/// Split into at most two explicit lines at a word boundary near the
-/// char budget. Each line renders as an HONEST single-line node, so
-/// measure equals paint by construction — no engine wrap involved,
-/// nothing to under-measure, nothing to clip.
-fn splitLines(text: []const u8, max_chars: usize) [2][]const u8 {
-    if (charCount(text) <= max_chars) return .{ text, "" };
-    var n: usize = 0;
-    var hard_cut: usize = text.len;
-    for (text, 0..) |b, i| {
-        if ((b & 0xC0) != 0x80) {
-            if (n == max_chars) {
-                hard_cut = i;
-                break;
-            }
-            n += 1;
+/// Split into explicit single-line nodes, so measure equals paint and the
+/// configured answer-line count is an actual layout contract.
+fn splitLines(text: []const u8, max_chars: usize, max_lines: usize) [bubble_answer_lines_max][]const u8 {
+    var lines: [bubble_answer_lines_max][]const u8 = @splat("");
+    var remaining = std.mem.trim(u8, text, " ");
+    var line_index: usize = 0;
+    while (remaining.len > 0 and line_index < @min(max_lines, bubble_answer_lines_max)) : (line_index += 1) {
+        if (charCount(remaining) <= max_chars) {
+            lines[line_index] = remaining;
+            break;
         }
+        var chars: usize = 0;
+        var hard_cut: usize = remaining.len;
+        for (remaining, 0..) |b, i| {
+            if ((b & 0xC0) != 0x80) {
+                if (chars == max_chars) {
+                    hard_cut = i;
+                    break;
+                }
+                chars += 1;
+            }
+        }
+        var cut = hard_cut;
+        if (std.mem.lastIndexOfScalar(u8, remaining[0..hard_cut], ' ')) |sp| {
+            if (hard_cut - sp <= 14) cut = sp;
+        }
+        lines[line_index] = std.mem.trim(u8, remaining[0..cut], " ");
+        remaining = std.mem.trim(u8, remaining[cut..], " ");
     }
-    var cut = hard_cut;
-    if (std.mem.lastIndexOfScalar(u8, text[0..hard_cut], ' ')) |sp| {
-        if (hard_cut - sp <= 14) cut = sp;
-    }
-    const first = std.mem.trim(u8, text[0..cut], " ");
-    const second = std.mem.trim(u8, text[cut..], " ");
-    return .{ first, second };
+    return lines;
 }
-const tail_h_f: f32 = 9;
-
 fn bubbleActive(model: *const Model) bool {
     return model.bubbles_enabled and !model.focus_mode and model.bubble.text_len > 0;
 }
@@ -2050,8 +2196,10 @@ fn syncBubbleWindow(model: *const Model, fx: *Effects) void {
     if (!bubbleActive(model)) return;
     const cur = fx.moveWindow("bubble", 0, 0, false) orelse return;
     const pet_w = frame_w * model.scale;
-    const want_x = model.pet_x + pet_w / 2.0 - bubble_window_w / 2.0;
-    const want_y = model.pet_y - bubble_window_h + 2.0;
+    const bubble_w = bubbleWindowWidth(model);
+    const bubble_h = bubbleWindowHeight(model);
+    const want_x = model.pet_x + pet_w / 2.0 - bubble_w / 2.0;
+    const want_y = model.pet_y - bubble_h + 2.0;
     const dx = want_x - cur.x;
     const dy = want_y - cur.y;
     if (@abs(dx) > 0.5 or @abs(dy) > 0.5) {
@@ -2087,27 +2235,23 @@ pub fn rootView(ui: *AppUi, model: *const Model) AppUi.Node {
 // ----------------------------------------------------------- bubble window
 
 fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
-    const chars_per_line = bubbleCharsPerLine(model.bubble_text_px);
-    const display_chars = chars_per_line * bubble_max_lines;
+    const chars_per_line: usize = model.bubble_columns;
+    const answer_lines: usize = model.bubble_answer_lines;
     const title_raw = model.bubble.title[0..model.bubble.title_len];
     const text_raw = model.bubble.text[0..model.bubble.text_len];
-    const title_clipped = clipDisplay(title_raw, display_chars, &bubble_title_scratch);
-    const text_clipped = clipDisplay(text_raw, display_chars, &bubble_text_scratch);
-    const title_lines = splitLines(title_clipped, chars_per_line);
-    const text_lines = splitLines(text_clipped, chars_per_line + 2);
+    const title_clipped = clipDisplay(title_raw, chars_per_line, &bubble_title_scratch, false);
+    const text_clipped = clipDisplay(text_raw, chars_per_line * answer_lines, &bubble_text_scratch, true);
+    const text_lines = splitLines(text_clipped, chars_per_line, answer_lines);
 
     const title_fg = if (model.dark) canvas.Color.rgb8(237, 237, 238) else canvas.Color.rgb8(17, 17, 17);
     const muted_fg = if (model.dark) canvas.Color.rgb8(156, 158, 168) else canvas.Color.rgb8(88, 92, 106);
     const text_fg = if (title_clipped.len > 0) muted_fg else title_fg;
 
-    // Up to four honest single-line nodes; empty lines render nothing.
-    var rows: [4]AppUi.Node = undefined;
+    // One question/title line plus the configured number of answer lines.
+    var rows: [1 + bubble_answer_lines_max]AppUi.Node = undefined;
     var row_count: usize = 0;
-    // `.heading` is the app-repurposed bubble-text rung (see
-    // petdexTokens): 13pt by default, the settings slider raises it.
-    for (title_lines) |line| {
-        if (line.len == 0) continue;
-        var node2 = ui.paragraph(.{ .size = .heading }, &.{.{ .text = line, .weight = .bold }});
+    if (title_clipped.len > 0) {
+        var node2 = ui.paragraph(.{ .size = .heading }, &.{.{ .text = title_clipped, .weight = .bold }});
         node2.widget.style.foreground = title_fg;
         rows[row_count] = node2;
         row_count += 1;
@@ -2121,8 +2265,8 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
     }
 
     var avatar = ui.image(.{
-        .width = 20,
-        .height = 20,
+        .width = bubble_avatar_width,
+        .height = bubble_avatar_width,
         .image = if (avatar_ready) avatar_image_id else 0,
         .semantics = .{ .label = "Agent avatar" },
     });
@@ -2133,7 +2277,7 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
     var waiting_marker = ui.text(.{ .size = .heading }, "!");
     waiting_marker.widget.style.foreground = canvas.Color.rgb8(250, 170, 48);
     const spinner_slot = if (model.bubble.busy)
-        ui.el(.spinner, .{ .width = 16, .height = 16, .semantics = .{ .label = "Working" } }, .{})
+        ui.el(.spinner, .{ .width = bubble_busy_width, .height = bubble_busy_width, .semantics = .{ .label = "Working" } }, .{})
     else if (model.state == .waiting)
         ui.el(.stack, .{
             .width = 16,
@@ -2143,14 +2287,14 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
             .semantics = .{ .label = "Approval or input required" },
         }, .{waiting_marker})
     else
-        ui.el(.stack, .{ .width = 16, .height = 16 }, .{});
+        ui.el(.stack, .{ .width = bubble_busy_width, .height = bubble_busy_width }, .{});
 
     var card = ui.el(.panel, .{
-        .padding = bubble_card_pad,
+        .padding = bubble_card_padding,
     }, .{
-        ui.row(.{ .gap = 8, .cross = .center }, .{
+        ui.row(.{ .gap = bubble_content_gap, .cross = .center }, .{
             avatar,
-            ui.column(.{ .gap = 2, .cross = .start }, @as([]const AppUi.Node, rows[0..row_count])),
+            ui.column(.{ .gap = bubble_line_gap, .cross = .start }, @as([]const AppUi.Node, rows[0..row_count])),
             spinner_slot,
         }),
     });
@@ -2163,8 +2307,8 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
         card.widget.style.background = canvas.Color.rgb8(255, 255, 255);
     }
     var tail = ui.image(.{
-        .width = tail_w,
-        .height = tail_h,
+        .width = @floatFromInt(tail_w),
+        .height = @floatFromInt(tail_h),
         .image = if (tail_ready) tail_image_id else 0,
     });
     tail.widget.image_fit = .contain;
@@ -2172,7 +2316,14 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
     // the tail rides up over the card's bottom hairline, hiding the
     // border segment behind it so bubble and arrow read as one shape.
     tail.widget.transform = canvas.Affine.translate(0, -1.5);
-    return ui.column(.{ .grow = 1, .main = .end, .cross = .center }, .{ card, tail });
+    // The bottom spacer is an explicit head gap. Keeping the group
+    // bottom-aligned avoids turning unused band height into a large,
+    // theme- or text-dependent distance from the pet.
+    return ui.column(.{ .grow = 1, .main = .end, .cross = .center }, .{
+        card,
+        tail,
+        ui.el(.stack, .{ .width = 1, .height = bubble_head_gap }, .{}),
+    });
 }
 
 // --------------------------------------------------------- settings window
@@ -2183,14 +2334,16 @@ const settings_canvas_label = "settings-canvas";
 fn petdexWindows(model: *const Model, scratch: *PetdexApp.WindowsScratch) []const PetdexApp.WindowDescriptor {
     var count: usize = 0;
     if (bubbleActive(model)) {
+        const bubble_w = bubbleWindowWidth(model);
+        const bubble_h = bubbleWindowHeight(model);
         scratch.windows[count] = .{
             .label = "bubble",
             .canvas_label = "bubble-canvas",
             .title = "",
-            .width = bubble_window_w,
-            .height = bubble_window_h,
-            .x = @floatCast(model.pet_x + (frame_w * model.scale) / 2.0 - bubble_window_w / 2.0),
-            .y = @floatCast(model.pet_y - bubble_window_h + 2.0),
+            .width = bubble_w,
+            .height = bubble_h,
+            .x = @floatCast(model.pet_x + (frame_w * model.scale) / 2.0 - bubble_w / 2.0),
+            .y = @floatCast(model.pet_y - bubble_h + 2.0),
             .resizable = false,
             .titlebar = .chromeless,
             .floating = true,
@@ -2270,12 +2423,12 @@ fn agentsSection(ui: *AppUi, model: *const Model) AppUi.Node {
             .semantics = .{ .label = info.kind.displayName() },
         }, .{
             ui.row(.{ .gap = 12, .cross = .center }, .{
-            logo,
-            ui.column(.{ .grow = 1, .main = .center }, .{
-                ui.text(.{}, info.kind.displayName()),
-                ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, agentStatusCaption(info, model.codex_trust_note)),
-            }),
-            trailing,
+                logo,
+                ui.column(.{ .grow = 1, .main = .center }, .{
+                    ui.text(.{}, info.kind.displayName()),
+                    ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, agentStatusCaption(info, model.codex_trust_note)),
+                }),
+                trailing,
             }),
         });
         count += 1;
@@ -2443,6 +2596,57 @@ fn settingsView(ui: *AppUi, model: *const Model) AppUi.Node {
                     ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Size of the bubble text"),
                 }),
                 ui.el(.slider, .{ .width = 150, .value = bubble_text_fraction, .on_value = AppUi.valueMsg(.set_bubble_text_size), .semantics = .{ .label = "Bubble text size" } }, .{}),
+            }),
+        }),
+        ui.el(.panel, .{ .style_tokens = .{ .background = .surface, .radius = .md } }, .{
+            ui.row(.{ .padding = 12, .cross = .center, .gap = 12 }, .{
+                ui.column(.{ .grow = 1 }, .{
+                    ui.text(.{}, "Characters per line"),
+                    ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "8–120; maximum characters before wrapping"),
+                }),
+                ui.el(.input, .{
+                    .width = 72,
+                    .height = 34,
+                    .text = model.bubble_columns_text[0..model.bubble_columns_text_len],
+                    .on_input = AppUi.inputMsg(.bubble_columns_input),
+                    .semantics = .{ .label = "Characters per line" },
+                }, .{}),
+            }),
+        }),
+        ui.el(.panel, .{ .style_tokens = .{ .background = .surface, .radius = .md } }, .{
+            ui.row(.{ .padding = 12, .cross = .center, .gap = 12 }, .{
+                ui.column(.{ .grow = 1 }, .{
+                    ui.text(.{}, "Answer lines"),
+                    ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "1–8 answer rows; title uses one additional row"),
+                }),
+                ui.el(.input, .{
+                    .width = 72,
+                    .height = 34,
+                    .text = model.bubble_answer_lines_text[0..model.bubble_answer_lines_text_len],
+                    .on_input = AppUi.inputMsg(.bubble_answer_lines_input),
+                    .semantics = .{ .label = "Answer lines" },
+                }, .{}),
+            }),
+        }),
+        ui.el(.panel, .{ .style_tokens = .{ .background = .surface, .radius = .md } }, .{
+            ui.column(.{ .padding = 12, .gap = 8 }, .{
+                ui.text(.{}, "Custom font file"),
+                ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } },
+                    if (model.font_load_failed)
+                        "Could not load this TrueType font; the default font is active"
+                    else if (model.font_path_dirty)
+                        "Saved; restart Petdex to apply"
+                    else if (custom_font_active)
+                        "Applied to all app text; restart after changing the path"
+                    else
+                        "Optional local .ttf path; leave empty for the default font"),
+                ui.el(.input, .{
+                    .height = 34,
+                    .text = model.font_path[0..model.font_path_len],
+                    .on_input = AppUi.inputMsg(.font_path_input),
+                    .placeholder = "/path/to/font.ttf",
+                    .semantics = .{ .label = "Custom font file path" },
+                }, .{}),
             }),
         }),
         ui.el(.panel, .{ .style_tokens = .{ .background = .surface, .radius = .md } }, .{
@@ -2654,6 +2858,30 @@ pub fn main(init: std.process.Init) !void {
     resolveInitialPet(init.io, boot_allocator, init.environ_map) catch |err| {
         std.debug.print("petdex: no pet found ({s}); install one with `petdex install <pet>`\n", .{@errorName(err)});
     };
+    var custom_font_bytes: ?[]u8 = null;
+    defer if (custom_font_bytes) |bytes| boot_allocator.free(bytes);
+    var font_registrations: [1]PetdexApp.FontRegistration = undefined;
+    var app_fonts: []const PetdexApp.FontRegistration = &.{};
+    if (initial_font_path_len > 0) {
+        const path = initial_font_path[0..initial_font_path_len];
+        if (plat.readFileAlloc(boot_allocator, path, max_custom_font_bytes)) |bytes| {
+            if (canvas.font_ttf.parseFailureReason(bytes) == null) {
+                custom_font_bytes = bytes;
+                custom_font_active = true;
+                font_registrations[0] = .{
+                    .id = custom_font_id,
+                    .name = path,
+                    .ttf = bytes,
+                };
+                app_fonts = font_registrations[0..];
+            } else {
+                boot_allocator.free(bytes);
+                initial_font_load_failed = true;
+            }
+        } else {
+            initial_font_load_failed = true;
+        }
+    }
     const app_state = try PetdexApp.create(std.heap.page_allocator, .{
         .name = "petdex-desktop-native",
         .scene = shell_scene,
@@ -2673,6 +2901,7 @@ pub fn main(init: std.process.Init) !void {
         .windows_fn = petdexWindows,
         .window_view = petdexWindowView,
         .tokens_fn = petdexTokens,
+        .fonts = app_fonts,
         .on_appearance = onAppearance,
     });
     defer app_state.destroy();
@@ -2729,12 +2958,28 @@ test {
     _ = plat;
 }
 
-test "bubble wrap budget scales inversely with the text size" {
-    // 26 chars was tuned for the 13pt default; it must survive as-is.
-    try std.testing.expectEqual(@as(usize, 26), bubbleCharsPerLine(bubble_text_min_px));
-    try std.testing.expectEqual(@as(usize, 17), bubbleCharsPerLine(bubble_text_max_px));
-    // Never below the floor, even past the slider's range.
-    try std.testing.expect(bubbleCharsPerLine(40) >= 10);
+test "bubble geometry follows columns lines and font size" {
+    var model: Model = .{};
+    try std.testing.expectEqual(bubble_columns_default, model.bubble_columns);
+    try std.testing.expectEqual(bubble_answer_lines_default, model.bubble_answer_lines);
+    const default_width = bubbleWindowWidth(&model);
+    const default_height = bubbleWindowHeight(&model);
+    model.bubble_columns = 60;
+    try std.testing.expect(bubbleWindowWidth(&model) > default_width);
+    model.bubble_answer_lines = 4;
+    try std.testing.expect(bubbleWindowHeight(&model) > default_height);
+    model.bubble_text_px = bubble_text_max_px;
+    try std.testing.expect(bubbleWindowWidth(&model) > default_width);
+    try std.testing.expect(bubbleWindowHeight(&model) > default_height);
+}
+
+test "custom font path round-trips through settings JSON escaping" {
+    const path = "C:\\Users\\名字\\Font \"Regular\".ttf";
+    var escaped_buf: [256]u8 = undefined;
+    const escaped = jsonEscapeString(path, &escaped_buf).?;
+    try std.testing.expectEqualStrings("C:\\\\Users\\\\名字\\\\Font \\\"Regular\\\".ttf", escaped);
+    var decoded_buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(path, jsonUnescapeString(escaped, &decoded_buf).?);
 }
 
 test "tap detection separates pats from drags" {

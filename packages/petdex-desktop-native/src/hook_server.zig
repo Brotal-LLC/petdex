@@ -133,8 +133,8 @@ pub const Mailbox = struct {
 pub var mailbox: Mailbox = .{};
 
 const valid_states = [_][]const u8{
-    "idle", "running", "running-left", "running-right", "waving",
-    "jumping", "failed", "review", "waiting",
+    "idle",    "running", "running-left", "running-right", "waving",
+    "jumping", "failed",  "review",       "waiting",
 };
 
 /// Session token entropy straight from the kernel CSPRNG. Zig 0.16
@@ -421,11 +421,10 @@ fn headerValueInt(head: []const u8, name: []const u8) ?usize {
 
 // ----------------------------------------------------------- json helpers
 
-/// Tiny extractor for the two flat shapes the hooks send. Not a JSON
-/// parser: finds "key":"value" (no escape support needed, states are
-/// enum words and bubble text is capped ASCII-ish) and "key":number.
-/// Escaped quotes in bubble text truncate at the escape, which only
-/// shortens the bubble, never corrupts memory.
+/// Small allocation-free parser: finds "key":"value" and "key":number.
+/// String slices retain JSON escapes for the caller to decode or flatten, but
+/// the scanner must skip them so multiline assistant messages are not cut at
+/// their first `\n`.
 pub fn jsonStringPub(body: []const u8, key: []const u8) ?[]const u8 {
     return jsonString(body, key);
 }
@@ -443,8 +442,20 @@ fn jsonString(body: []const u8, key: []const u8) ?[]const u8 {
     if (i >= body.len or body[i] != '"') return null;
     i += 1;
     const val_start = i;
-    while (i < body.len and body[i] != '"' and body[i] != '\\') i += 1;
+    while (i < body.len) {
+        if (body[i] == '\\') {
+            i += @min(@as(usize, 2), body.len - i);
+            continue;
+        }
+        if (body[i] == '"') break;
+        i += 1;
+    }
     return body[val_start..i];
+}
+
+test "json string scanner preserves escaped multiline content" {
+    const body = "{\"last_assistant_message\":\"first\\nsecond third\",\"phase\":\"stop\"}";
+    try std.testing.expectEqualStrings("first\\nsecond third", jsonString(body, "last_assistant_message").?);
 }
 
 fn jsonNumber(body: []const u8, key: []const u8) ?f64 {
