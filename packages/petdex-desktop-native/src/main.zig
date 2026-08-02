@@ -213,7 +213,7 @@ pub const Model = struct {
     /// Bubble text size in points, persisted. The bubble rendered at a
     /// fixed 13 (the `.sm` rung); this keeps 13 as the floor and lets
     /// the settings slider raise it to 20.
-    bubble_text_px: f32 = bubble_text_min_px,
+    bubble_text_px: f32 = bubble_text_default_px,
     /// Seconds a completed (non-busy) bubble remains visible. Zero
     /// disables automatic expiry.
     bubble_lifetime_secs: f32 = bubble_lifetime_default_secs,
@@ -1062,7 +1062,7 @@ var initial_scale: f32 = 0.7;
 var initial_pet: u32 = 0;
 var initial_bubbles: bool = true;
 var initial_waiting_sound: bool = false;
-var initial_bubble_text_px: f32 = bubble_text_min_px;
+var initial_bubble_text_px: f32 = bubble_text_default_px;
 var initial_bubble_lifetime_secs: f32 = bubble_lifetime_default_secs;
 var initial_bubble_columns: u16 = bubble_columns_default;
 var initial_bubble_answer_lines: u8 = bubble_answer_lines_default;
@@ -1197,14 +1197,18 @@ fn registerTail(dark: bool, fx: *Effects) void {
                 pixels[i + 1] = cg;
                 pixels[i + 2] = cb;
                 pixels[i + 3] = 255;
-                // The card carries a hairline in dark mode: the tail's
-                // diagonal edges continue it so the join reads as one
-                // outlined shape (the top row stays plain - it tucks
-                // under the card).
-                if (dark and y > 0 and (x == inset or x == tail_w - inset - 1)) {
-                    pixels[i] = 48;
-                    pixels[i + 1] = 48;
-                    pixels[i + 2] = 53;
+                // Hairline along the tail's diagonal edges so the join
+                // reads as one outlined shape (the top row stays plain,
+                // it tucks under the card). Both themes need it: a white
+                // tail on a light desktop background has no silhouette
+                // at all, which is the same reason the card is outlined.
+                if (y > 0 and (x == inset or x == tail_w - inset - 1)) {
+                    const er: u8 = if (dark) 48 else 214;
+                    const eg: u8 = if (dark) 48 else 214;
+                    const eb: u8 = if (dark) 53 else 220;
+                    pixels[i] = er;
+                    pixels[i + 1] = eg;
+                    pixels[i + 2] = eb;
                 }
             }
         }
@@ -1782,6 +1786,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .set_bubble_text_size => |fraction| {
             model.bubble_text_px = bubble_text_min_px + fraction * (bubble_text_max_px - bubble_text_min_px);
             _ = fitWindow(model, fx);
+            syncBubbleWindow(model, fx);
             saveSettings(model);
         },
         .bubble_lifetime_input => |edit| {
@@ -1797,6 +1802,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (editUnsignedText(model.bubble_columns_text[0..], &model.bubble_columns_text_len, edit, bubble_columns_min, bubble_columns_max)) |value| {
                 model.bubble_columns = value;
                 _ = fitWindow(model, fx);
+                syncBubbleWindow(model, fx);
                 saveSettings(model);
             }
         },
@@ -1804,6 +1810,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (editUnsignedText(model.bubble_answer_lines_text[0..], &model.bubble_answer_lines_text_len, edit, bubble_answer_lines_min, bubble_answer_lines_max)) |value| {
                 model.bubble_answer_lines = @intCast(value);
                 _ = fitWindow(model, fx);
+                syncBubbleWindow(model, fx);
                 saveSettings(model);
             }
         },
@@ -2170,6 +2177,13 @@ fn bubbleFontSize(model: *const Model) f32 {
 /// Bubble text size bounds shared by all desktop platforms.
 const bubble_text_min_px: f32 = 8;
 const bubble_text_max_px: f32 = 20;
+/// The size the bubble shipped at before the slider existed, and the
+/// floor the range used to have. #625 lowered the minimum to 8 for people
+/// who want a denser bubble, but left the default pinned to the minimum,
+/// so every install silently shrank to 8 and the slider sat hard left.
+/// The default is its own value now: widening the range must not move
+/// what a fresh install looks like.
+const bubble_text_default_px: f32 = 13;
 
 /// Count display characters (UTF-8 sequences, not bytes).
 fn charCount(text: []const u8) usize {
@@ -2260,15 +2274,32 @@ fn fitWindow(model: *const Model, fx: *Effects) bool {
     return fx.resizeWindow("main", frame_w * model.scale, frame_h * model.scale, .bottom_center);
 }
 
-/// Keep the bubble window glued above the pet: read both origins and
-/// close the gap. Self-correcting, so drags, throws, and scale changes
-/// all need no special-casing.
+/// Track the bubble window's last known size so a settings change that
+/// grows the card can grow the window with it. The window is created
+/// once at its then-current size; without this it keeps that size
+/// forever and a larger card renders off its right edge while the tail
+/// points at nothing.
+var bubble_window_w: f32 = 0;
+var bubble_window_h: f32 = 0;
+
+/// Keep the bubble window glued above the pet and sized to its content:
+/// read both origins and close the gap. Self-correcting, so drags,
+/// throws, scale changes, and text-size changes all need no
+/// special-casing.
 fn syncBubbleWindow(model: *const Model, fx: *Effects) void {
     if (!bubbleActive(model)) return;
-    const cur = fx.moveWindow("bubble", 0, 0, false) orelse return;
-    const pet_w = frame_w * model.scale;
     const bubble_w = bubbleWindowWidth(model);
     const bubble_h = bubbleWindowHeight(model);
+    // Resize before moving: the move centers on the new width, so doing
+    // it the other way round centers on the old one and leaves the
+    // bubble offset by half the delta.
+    if (@abs(bubble_w - bubble_window_w) > 0.5 or @abs(bubble_h - bubble_window_h) > 0.5) {
+        _ = fx.resizeWindow("bubble", bubble_w, bubble_h, .top_left);
+        bubble_window_w = bubble_w;
+        bubble_window_h = bubble_h;
+    }
+    const cur = fx.moveWindow("bubble", 0, 0, false) orelse return;
+    const pet_w = frame_w * model.scale;
     const want_x = model.pet_x + pet_w / 2.0 - bubble_w / 2.0;
     const want_y = model.pet_y - bubble_h + 2.0;
     const dx = want_x - cur.x;
@@ -2376,6 +2407,12 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
         card.widget.style.stroke_width = 1;
     } else {
         card.widget.style.background = canvas.Color.rgb8(255, 255, 255);
+        // Light mode needs the outline more than dark does, not less: a
+        // white card floats over a white editor with no silhouette, and
+        // the tail is the first part to disappear because it is the
+        // narrowest. Matches the tail hairline in registerTail.
+        card.widget.style.border = canvas.Color.rgb8(214, 214, 220);
+        card.widget.style.stroke_width = 1;
     }
     var tail = ui.image(.{
         .width = @floatFromInt(tail_w),
@@ -3037,6 +3074,21 @@ test "one image slot covers every agent" {
     // agent_art is what loadAgentsAtlas walks, so a new AgentKind without
     // artwork would pack short and leave the last agent blank.
     try std.testing.expectEqual(agent_hooks.agent_count, agent_art.len);
+}
+
+test "bubble text default is its own value, not the range floor" {
+    // #625 widened the range down to 8 while the default still read
+    // `min`, so every install shrank and the slider sat hard left. The
+    // default must survive the next range change too.
+    try std.testing.expectEqual(@as(f32, 13), bubble_text_default_px);
+    try std.testing.expect(bubble_text_default_px > bubble_text_min_px);
+    try std.testing.expect(bubble_text_default_px < bubble_text_max_px);
+    // A fresh model renders at the default, and the slider reflects it
+    // somewhere in the middle rather than at either end.
+    const fresh: Model = .{};
+    try std.testing.expectEqual(bubble_text_default_px, fresh.bubble_text_px);
+    const fraction = (fresh.bubble_text_px - bubble_text_min_px) / (bubble_text_max_px - bubble_text_min_px);
+    try std.testing.expect(fraction > 0.2 and fraction < 0.8);
 }
 
 test "waiting escalation pings once, only while still waiting" {
