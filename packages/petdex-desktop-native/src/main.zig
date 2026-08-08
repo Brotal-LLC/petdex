@@ -44,7 +44,7 @@ const default_pet_slug = "boba";
 
 const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
 const shell_views = [_]native_sdk.ShellView{
-    .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .role = "Pet canvas", .accessibility_label = "Petdex pet", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
+    .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .role = "Pet canvas", .accessibility_label = "Petdex pet", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .premultiplied, .gpu_color_space = .srgb, .gpu_vsync = true },
 };
 const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
@@ -281,7 +281,7 @@ pub const Model = struct {
 /// Petdex web tokens (globals.css) translated from OKLCH: brand purple
 /// #5266ea family, cool-tinted near-white light surfaces, stone-900
 /// dark cards. High contrast keeps the stock loud register untouched.
-fn petdexTokens(model: *const Model) canvas.DesignTokens {
+fn petdexThemeTokens(model: *const Model) canvas.DesignTokens {
     const scheme: canvas.ColorScheme = if (model.dark) .dark else .light;
     var tokens = canvas.DesignTokens.theme(.{
         .color_scheme = scheme,
@@ -319,6 +319,18 @@ fn petdexTokens(model: *const Model) canvas.DesignTokens {
         c.destructive = canvas.Color.rgb8(212, 12, 26);
     }
     return tokens.withOverrides(canvas.accentOverrides(c.accent, scheme));
+}
+
+fn petdexTokens(model: *const Model) canvas.DesignTokens {
+    var tokens = petdexThemeTokens(model);
+    // Transparent pet and bubble windows must clear to zero alpha. The
+    // settings window paints its own opaque page background below.
+    tokens.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
+    return tokens;
+}
+
+pub fn settingsBackground(model: *const Model) canvas.Color {
+    return petdexThemeTokens(model).colors.background;
 }
 
 fn onAppearance(appearance: native_sdk.platform.Appearance) ?Msg {
@@ -2020,6 +2032,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     const dy = (read.cursor_y - model.grab_dy) - read.y;
                     if (dx != 0 or dy != 0) {
                         if (fx.moveWindow("main", dx, dy, false)) |moved| {
+                            model.pet_x = moved.x;
+                            model.pet_y = moved.y;
                             pushSample(model, moved.x, moved.y, now);
                         }
                     } else {
@@ -2037,6 +2051,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                             setThrowState(model, .idle, fx);
                         }
                     }
+                    // The main window has moved since the frame-clock read
+                    // above. Re-anchor the bubble immediately so a drag
+                    // across displays does not leave it one frame behind.
+                    syncBubbleWindow(model, fx);
                     return;
                 }
                 // Release: velocity from our own 100ms sample tail,
@@ -2919,6 +2937,30 @@ fn fitWindow(model: *const Model, fx: *Effects) bool {
 /// points at nothing.
 var bubble_window_w: f32 = 0;
 var bubble_window_h: f32 = 0;
+const window_position_epsilon: f64 = 0.5;
+
+const BubbleMovePlan = struct {
+    dx: f64,
+    dy: f64,
+};
+
+/// Calculate a global-coordinate move without applying a display clamp.
+/// The caller applies the destination display's visible-frame constraint
+/// only after this move has crossed any monitor boundary.
+fn bubbleMovePlan(cur_x: f64, cur_y: f64, want_x: f64, want_y: f64) ?BubbleMovePlan {
+    const dx = want_x - cur_x;
+    const dy = want_y - cur_y;
+    if (@abs(dx) <= window_position_epsilon and @abs(dy) <= window_position_epsilon) return null;
+    return .{ .dx = dx, .dy = dy };
+}
+
+/// Return a correction from the host's reported clamped origin to the
+/// origin that a readback says is actually on screen. Older Native SDK
+/// hosts reported a zero-delta clamp result without applying the origin;
+/// the second, unbounded leg below keeps this app correct with either host.
+fn bubbleClampCorrection(actual_x: f64, actual_y: f64, settled_x: f64, settled_y: f64) ?BubbleMovePlan {
+    return bubbleMovePlan(actual_x, actual_y, settled_x, settled_y);
+}
 
 /// Keep the bubble window glued above the pet and sized to its content:
 /// read both origins and close the gap. Self-correcting, so drags,
@@ -2948,19 +2990,27 @@ fn syncBubbleWindow(model: *Model, fx: *Effects) void {
     const pet_w = frame_w * model.scale;
     const want_x = model.pet_x + pet_w / 2.0 - bubble_w / 2.0;
     const want_y = bubbleWantY(model, bubble_h);
-    const dx = want_x - cur.x;
-    const dy = want_y - cur.y;
-    if (@abs(dx) > 0.5 or @abs(dy) > 0.5) {
-        // Clamped move: the host keeps the window inside the screen's
-        // visible frame and reports which edges it hit. That clamp is
-        // the only screen-bounds information the platform exposes (it
-        // never returns the frame itself), so a wide stack next to a
-        // corner is kept on-screen by asking for the move and letting
-        // the host trim it, rather than by math we cannot do here.
-        if (fx.moveWindow("bubble", dx, dy, true)) |moved| {
-            recordPetCenterLocal(model, moved.x);
-            return;
+    if (bubbleMovePlan(cur.x, cur.y, want_x, want_y)) |plan| {
+        // `true` constrains against the display that currently owns the
+        // window. It cannot be used for the first leg of a cross-display
+        // move: the bubble would remain trapped on the old display.
+        _ = fx.moveWindow("bubble", plan.dx, plan.dy, false) orelse return;
+        // The global move has reached the target display. A zero-distance
+        // constrained move now lets that display apply its visible-frame
+        // correction, including negative coordinates and taskbar insets.
+        const settled = fx.moveWindow("bubble", 0, 0, true) orelse return;
+        // The pre-fix macOS host returned the clamped origin here but did
+        // not call setFrameOrigin when dx/dy were zero. Read the actual
+        // origin back and reconcile that legacy behavior explicitly; this
+        // also makes the app robust while an SDK fix is rolling out.
+        const actual = fx.moveWindow("bubble", 0, 0, false) orelse return;
+        if (bubbleClampCorrection(actual.x, actual.y, settled.x, settled.y)) |correction| {
+            const corrected = fx.moveWindow("bubble", correction.dx, correction.dy, false) orelse return;
+            recordPetCenterLocal(model, corrected.x);
+        } else {
+            recordPetCenterLocal(model, actual.x);
         }
+        return;
     }
     recordPetCenterLocal(model, cur.x);
 }
@@ -3578,6 +3628,23 @@ test "every agent gets its own cell in the icon strip" {
     const atlas_w = agent_hooks.agent_count * agent_icon_px;
     try std.testing.expect(atlas_w * agent_icon_px * 4 <= 1024 * 1024);
     try std.testing.expect(atlas_w <= 512 * 512);
+}
+
+test "transparent surfaces clear independently from settings" {
+    // The pet and bubble windows contain transparent atlas padding. Their
+    // GPU surface must preserve that alpha instead of painting a rectangle.
+    try std.testing.expectEqualStrings("premultiplied", @tagName(shell_views[0].gpu_alpha_mode.?));
+    try std.testing.expect(shell_windows[0].transparent);
+
+    var model: Model = .{};
+    const pet_background = petdexTokens(&model).colors.background;
+    const settings_background = settingsBackground(&model);
+    try std.testing.expectEqual(@as(f32, 0), pet_background.a);
+    try std.testing.expectEqual(@as(f32, 1), settings_background.a);
+
+    model.dark = false;
+    try std.testing.expectEqual(@as(f32, 0), petdexTokens(&model).colors.background.a);
+    try std.testing.expectEqual(@as(f32, 1), settingsBackground(&model).a);
 }
 
 test "one image slot covers every agent" {
@@ -4198,6 +4265,67 @@ test "the stack axis follows the pet when the window is clamped off-center" {
     // rather than jumping when the fan opens.
     const mid = bubbleStackAxis(&model, stack_w, 0.5);
     try std.testing.expect(mid < axis_right and mid > stack_w / 2);
+}
+
+test "bubble movement crosses displays before applying target bounds" {
+    // A constrained relative move is bounded by the display that owns the
+    // bubble before the move. It cannot cross a monitor boundary from that
+    // display, so the implementation must first use global coordinates and
+    // only then ask the destination display to apply its visible-frame clamp.
+    const src = @embedFile("main.zig");
+    const sync_start = std.mem.indexOf(u8, src, "fn syncBubbleWindow").?;
+    const sync = src[sync_start..];
+    const unbounded = std.mem.indexOf(u8, sync, "fx.moveWindow(\"bubble\", plan.dx, plan.dy, false)");
+    const bounded = std.mem.indexOf(u8, sync, "fx.moveWindow(\"bubble\", 0, 0, true)");
+    const readback = std.mem.indexOf(u8, sync, "const actual = fx.moveWindow(\"bubble\", 0, 0, false)");
+    const correction = std.mem.indexOf(u8, sync, "fx.moveWindow(\"bubble\", correction.dx, correction.dy, false)");
+    try std.testing.expect(unbounded != null);
+    try std.testing.expect(bounded != null);
+    try std.testing.expect(readback != null);
+    try std.testing.expect(correction != null);
+    try std.testing.expect(unbounded.? < bounded.?);
+    try std.testing.expect(bounded.? < readback.?);
+    try std.testing.expect(readback.? < correction.?);
+}
+
+test "bubble move plan preserves signed screen coordinates" {
+    const MoveCase = struct {
+        cur_x: f64,
+        cur_y: f64,
+        want_x: f64,
+        want_y: f64,
+        dx: f64,
+        dy: f64,
+    };
+    const cases = [_]MoveCase{
+        .{ .cur_x = 1280, .cur_y = 120, .want_x = -640, .want_y = 120, .dx = -1920, .dy = 0 },
+        .{ .cur_x = -1440, .cur_y = -300, .want_x = 1920, .want_y = 600, .dx = 3360, .dy = 900 },
+        .{ .cur_x = 300, .cur_y = -900, .want_x = 300, .want_y = 200, .dx = 0, .dy = 1100 },
+        .{ .cur_x = 300, .cur_y = 900, .want_x = 300, .want_y = -800, .dx = 0, .dy = -1700 },
+    };
+    for (cases) |case| {
+        const plan = bubbleMovePlan(case.cur_x, case.cur_y, case.want_x, case.want_y) orelse {
+            return error.MissingMovePlan;
+        };
+        try std.testing.expectApproxEqAbs(case.dx, plan.dx, 0.001);
+        try std.testing.expectApproxEqAbs(case.dy, plan.dy, 0.001);
+    }
+    try std.testing.expect(bubbleMovePlan(10, 20, 10.4, 20.4) == null);
+}
+
+test "bubble clamp correction reconciles a reported-only host clamp" {
+    // A legacy host may report the target display's clamped origin while
+    // leaving the window at the requested off-screen origin. The correction
+    // must move from the read-back origin to the reported settled origin.
+    const correction = bubbleClampCorrection(1920, 110, 1680, 96) orelse {
+        return error.MissingClampCorrection;
+    };
+    try std.testing.expectApproxEqAbs(-240, correction.dx, 0.001);
+    try std.testing.expectApproxEqAbs(-14, correction.dy, 0.001);
+
+    // A fixed host has already applied the clamp, so the extra leg is a
+    // no-op and must not perturb the window a second time.
+    try std.testing.expect(bubbleClampCorrection(1680, 96, 1680, 96) == null);
 }
 
 test "the hover rect covers the whole visible card, not just its text" {
