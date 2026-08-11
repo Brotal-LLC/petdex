@@ -76,16 +76,26 @@ pub const Scratch = struct {
     cmd: [1024]u8 = undefined,
 };
 
-/// Quote one path for the remote shell: wrapped in single quotes, any
+/// Quote one path for the remote shell. A leading `~/` becomes
+/// `"$HOME"/'...'` so the remote account's home expands while the
+/// suffix remains quoted. Other paths are wrapped in single quotes; any
 /// embedded quote becoming the classic '\'' sequence. Paths we invent
 /// never contain quotes, but a config-provided prefix could, and an
 /// unquoted metacharacter here is a remote command injection.
 pub fn shQuote(buf: []u8, path: []const u8) ?[]const u8 {
     var n: usize = 0;
+    var literal = path;
+    if (std.mem.startsWith(u8, path, "~/")) {
+        const home_prefix = "\"$HOME\"/";
+        if (home_prefix.len > buf.len) return null;
+        @memcpy(buf[0..home_prefix.len], home_prefix);
+        n = home_prefix.len;
+        literal = path[2..];
+    }
     if (n >= buf.len) return null;
     buf[n] = '\'';
     n += 1;
-    for (path) |c| {
+    for (literal) |c| {
         if (c == '\'') {
             if (n + 4 > buf.len) return null;
             buf[n .. n + 4][0..4].* = "'\\''".*;
@@ -317,30 +327,30 @@ test "read and write quote remote paths for the remote shell" {
     var buf: [max_argv][]const u8 = undefined;
     var scratch: Scratch = .{};
     const rd = readArgv(&buf, &scratch, &test_remote, remote_codex_hooks).?;
-    try t.expectEqualStrings("cat -- '~/.codex/hooks.json'", rd[rd.len - 1]);
+    try t.expectEqualStrings("cat -- \"$HOME\"/'.codex/hooks.json'", rd[rd.len - 1]);
 
     var scratch2: Scratch = .{};
     const wr = writeArgv(&buf, &scratch2, &test_remote, remote_opencode_plugin, true, false).?;
     try t.expectEqualStrings(
-        "mkdir -p '~/.config/opencode/plugins' && cat > '~/.config/opencode/plugins/petdex.js'",
+        "mkdir -p \"$HOME\"/'.config/opencode/plugins' && cat > \"$HOME\"/'.config/opencode/plugins/petdex.js'",
         wr[wr.len - 1],
     );
 
     var scratch3: Scratch = .{};
     const app = writeArgv(&buf, &scratch3, &test_remote, remote_opencode_plugin, false, false).?;
-    try t.expectEqualStrings("cat >> '~/.config/opencode/plugins/petdex.js'", app[app.len - 1]);
+    try t.expectEqualStrings("cat >> \"$HOME\"/'.config/opencode/plugins/petdex.js'", app[app.len - 1]);
 
     var scratch4: Scratch = .{};
     const exe = writeArgv(&buf, &scratch4, &test_remote, remote_hook_script, true, true).?;
     try t.expectEqualStrings(
-        "mkdir -p '~/.petdex/bin' && cat > '~/.petdex/bin/petdex-hook' && chmod 755 '~/.petdex/bin/petdex-hook'",
+        "mkdir -p \"$HOME\"/'.petdex/bin' && cat > \"$HOME\"/'.petdex/bin/petdex-hook' && chmod 755 \"$HOME\"/'.petdex/bin/petdex-hook'",
         exe[exe.len - 1],
     );
 }
 
 test "shQuote escapes embedded quotes instead of trusting the path" {
     var qb: [512]u8 = undefined;
-    try t.expectEqualStrings("'~/x/y'", shQuote(&qb, "~/x/y").?);
+    try t.expectEqualStrings("\"$HOME\"/'x/y'", shQuote(&qb, "~/x/y").?);
     try t.expectEqualStrings("'a'\\''b'", shQuote(&qb, "a'b").?);
     // No silent truncation: an over-long path is null, not a cut string.
     try t.expect(shQuote(qb[0..4], "~/x/y") == null);
@@ -352,7 +362,7 @@ test "tokenArgv lands the token 0600 under ~/.petdex" {
     var scratch: Scratch = .{};
     const argv = tokenArgv(&buf, &scratch, &test_remote).?;
     try t.expectEqualStrings(
-        "umask 077; mkdir -p '~/.petdex/runtime' && cat > '~/.petdex/runtime/update-token'",
+        "umask 077; mkdir -p \"$HOME\"/'.petdex/runtime' && cat > \"$HOME\"/'.petdex/runtime/update-token'",
         argv[argv.len - 1],
     );
 }
