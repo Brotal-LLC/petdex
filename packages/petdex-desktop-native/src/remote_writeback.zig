@@ -249,7 +249,8 @@ test "Hermes watcher reconciles only current metadata" {
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "ACTIVE_RECONCILE_MAX_AGE_SECONDS") != null);
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "not activity") != null);
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "parent_session_id") != null);
-    try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "not bool(\n        str(session_key") != null);
+    try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "and not bool(") != null);
+    try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "str(session_key") != null);
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "\"feed_source\": \"state-db\"") != null);
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "SELECT content") == null);
 }
