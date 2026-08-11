@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""Bounded remote Codex rollout follower for Petdesk.
+
+The process runs beside Codex on an SSH host and posts the same authoritative
+session-index titles and rollout prose consumed by Codex Desktop through the
+reverse Petdesk tunnel. Historical completed sessions are never published.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import os
+import socket
+import sys
+import time
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+HOME = Path.home()
+CODEX = HOME / ".codex"
+RUNTIME = HOME / ".petdex" / "runtime"
+TOKEN = RUNTIME / "update-token"
+LOCK = RUNTIME / "codex-watch.lock"
+PID = RUNTIME / "codex-watch.pid"
+INDEX = CODEX / "session_index.jsonl"
+SESSIONS = CODEX / "sessions"
+ENDPOINT = "http://127.0.0.1:7777/bubble"
+DISCOVERY_SECONDS = 2.0
+FOLLOW_SECONDS = 0.25
+MAX_INDEX_BYTES = 4 * 1024 * 1024
+MAX_ROLLOUT_BYTES = 4 * 1024 * 1024
+MAX_WATCHES = 8
+MAX_RECENT_IDS = 32
+# A rollout without a terminal event is not necessarily still alive. Codex can
+# be killed, a host can reboot, or an old `codex exec` can simply stop writing.
+# On initial reconciliation, only a recently-written running rollout is
+# eligible. Explicit unmatched input remains eligible regardless of age so a
+# question waiting across a restart is never lost.
+INITIAL_RUNNING_MAX_AGE_SECONDS = 15 * 60
+
+
+def bounded_tail(path: Path, limit: int) -> bytes:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            data = handle.read(limit)
+            if size > limit:
+                newline = data.find(b"\n")
+                if newline >= 0:
+                    data = data[newline + 1 :]
+            return data
+    except OSError:
+        return b""
+
+
+def compact(value: Any, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def session_index() -> list[dict[str, str]]:
+    rows: dict[str, dict[str, str]] = {}
+    raw = bounded_tail(INDEX, MAX_INDEX_BYTES).decode("utf-8", "ignore")
+    for line in raw.splitlines():
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        session_id = compact(item.get("id") or item.get("session_id"), 96)
+        if not session_id:
+            continue
+        # A server-side rename appends a fresh row for an existing id. Move
+        # that id to the tail as well as replacing its title so the bounded
+        # recent set cannot discard an actively renamed older conversation.
+        rows.pop(session_id, None)
+        rows[session_id] = {
+            "id": session_id,
+            "title": compact(item.get("thread_name") or item.get("title"), 256),
+            "updated": compact(item.get("updated_at") or item.get("timestamp"), 64),
+        }
+    return list(rows.values())[-MAX_RECENT_IDS:]
+
+
+def rollout_catalog() -> dict[str, Path]:
+    found: dict[str, tuple[float, Path]] = {}
+    try:
+        paths = SESSIONS.glob("*/*/*/rollout-*.jsonl")
+        for path in paths:
+            stem = path.stem
+            session_id = stem.rsplit("-", 5)[-5:]
+            # UUIDv7 session ids are the final five dash-separated segments.
+            sid = "-".join(session_id)
+            try:
+                modified = path.stat().st_mtime
+            except OSError:
+                continue
+            previous = found.get(sid)
+            if previous is None or modified > previous[0]:
+                found[sid] = (modified, path)
+    except OSError:
+        return {}
+    return {sid: value[1] for sid, value in found.items()}
+
+
+def recent_rollouts(catalog: dict[str, Path]) -> list[tuple[str, Path]]:
+    """Newest rollout files, including CLI sessions absent from the index."""
+
+    def modified(item: tuple[str, Path]) -> float:
+        try:
+            return item[1].stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(catalog.items(), key=modified, reverse=True)[:MAX_RECENT_IDS]
+
+
+def request_prompt(arguments: Any) -> str:
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except Exception:
+            arguments = {}
+    if not isinstance(arguments, dict):
+        return "Waiting for you…"
+    questions = arguments.get("questions")
+    if isinstance(questions, list):
+        for item in questions:
+            if isinstance(item, dict) and item.get("question"):
+                return compact(item["question"], 960)
+    for key in ("question", "justification", "prompt", "reason", "message"):
+        if arguments.get(key):
+            return compact(arguments[key], 960)
+    return "Waiting for you…"
+
+
+def parse_rollout(path: Path, title: str) -> dict[str, Any] | None:
+    raw = bounded_tail(path, MAX_ROLLOUT_BYTES).decode("utf-8", "ignore")
+    if not raw:
+        return None
+    status = "idle"
+    text = ""
+    message_kind = "status"
+    turn_id = ""
+    cwd = ""
+    lifecycle = False
+    pending: dict[str, str] = {}
+    newest_message_id = ""
+    resolved_request_id = ""
+    fallback_title = ""
+
+    for line in raw.splitlines():
+        try:
+            envelope = json.loads(line)
+        except Exception:
+            continue
+        payload = envelope.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        outer = envelope.get("type")
+        event_type = payload.get("type")
+
+        if outer == "session_meta":
+            cwd = compact(payload.get("cwd"), 512)
+            continue
+        if event_type == "user_message" and not fallback_title:
+            fallback_title = compact(payload.get("message"), 256)
+            continue
+        if event_type == "task_started":
+            lifecycle = True
+            status = "running"
+            text = ""
+            message_kind = "status"
+            turn_id = compact(payload.get("turn_id"), 64)
+            pending.clear()
+            continue
+        if event_type == "task_complete":
+            lifecycle = True
+            status = "completed"
+            turn_id = compact(payload.get("turn_id"), 64) or turn_id
+            pending.clear()
+            final = compact(payload.get("last_agent_message"), 960)
+            if final:
+                text = final
+                message_kind = "assistant"
+            continue
+        if event_type in {"turn_aborted", "task_failed"}:
+            lifecycle = True
+            status = "failed"
+            turn_id = compact(payload.get("turn_id"), 64) or turn_id
+            pending.clear()
+            reason = compact(payload.get("reason"), 80).lower()
+            text = "Interrupted." if reason == "interrupted" else "Session failed."
+            message_kind = "status"
+            continue
+        if outer == "response_item" and event_type == "function_call":
+            name = str(payload.get("name") or "")
+            arguments = payload.get("arguments")
+            parsed_arguments: Any = arguments
+            if isinstance(arguments, str):
+                try:
+                    parsed_arguments = json.loads(arguments)
+                except Exception:
+                    parsed_arguments = {}
+            requires_approval = isinstance(parsed_arguments, dict) and parsed_arguments.get("sandbox_permissions") == "require_escalated"
+            if name == "request_user_input" or requires_approval:
+                call_id = compact(payload.get("call_id") or payload.get("id") or "input-request", 96)
+                pending[call_id] = request_prompt(parsed_arguments)
+                newest_message_id = call_id
+                status = "needs_input"
+                text = pending[call_id]
+                message_kind = "prompt"
+            continue
+        if outer == "response_item" and event_type in {"function_call_output", "custom_tool_call_output"}:
+            call_id = compact(payload.get("call_id") or payload.get("id"), 96)
+            if call_id in pending:
+                pending.pop(call_id, None)
+                resolved_request_id = call_id
+                newest_message_id = call_id
+                if not pending:
+                    status = "running"
+                    text = "Thinking…"
+                    message_kind = "status"
+            continue
+        if event_type == "agent_message":
+            message = compact(payload.get("message"), 960)
+            if message:
+                text = message
+                message_kind = "assistant"
+                newest_message_id = compact(payload.get("id") or envelope.get("timestamp"), 96)
+            continue
+        if event_type == "agent_reasoning":
+            reasoning = compact(payload.get("text"), 960)
+            if reasoning and message_kind != "assistant":
+                text = reasoning
+                message_kind = "reasoning"
+                newest_message_id = compact(payload.get("id") or envelope.get("timestamp"), 96)
+
+    if pending:
+        status = "needs_input"
+        newest_message_id, text = next(reversed(pending.items()))
+        message_kind = "prompt"
+    elif not lifecycle:
+        if not text:
+            return None
+        status = "running"
+    if not text:
+        text = "Thinking…" if status == "running" else "Done."
+    resolved_title = title or fallback_title
+    event_kind = {
+        "needs_input": "request_user_input",
+        "completed": "session-end",
+        "failed": "session-failure",
+        "running": "assistant" if message_kind == "assistant" else "agent-progress",
+    }.get(status, "reconcile")
+    return {
+        "text": text,
+        "title": resolved_title,
+        "busy": status == "running",
+        "agent_source": "codex",
+        "conversation_key": path.stem[-36:],
+        "source_session_id": path.stem[-36:],
+        "session_id": path.stem[-36:],
+        "session_kind": "primary",
+        "hostname": compact(socket.gethostname(), 64),
+        "remote": True,
+        "source_cwd": cwd,
+        "turn_id": turn_id,
+        "message_id": newest_message_id,
+        "event_kind": event_kind,
+        "request_id": newest_message_id if status == "needs_input" else "",
+        "resolves_request_id": resolved_request_id if status != "needs_input" else "",
+        "message_kind": message_kind,
+        "title_source": "server" if title else ("prompt" if fallback_title else "unknown"),
+        "feed_source": "rollout",
+        "status": status,
+    }
+
+
+def digest(event: dict[str, Any]) -> str:
+    encoded = json.dumps(event, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def initial_publishable(event: dict[str, Any], path: Path, now: float | None = None) -> bool:
+    if event.get("status") == "needs_input":
+        return True
+    if event.get("status") != "running":
+        return False
+    try:
+        modified = path.stat().st_mtime
+    except OSError:
+        return False
+    current = time.time() if now is None else now
+    return max(0.0, current - modified) <= INITIAL_RUNNING_MAX_AGE_SECONDS
+
+
+def post(event: dict[str, Any]) -> bool:
+    try:
+        token = TOKEN.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if not token:
+        return False
+    request = urllib.request.Request(
+        ENDPOINT,
+        data=json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "x-petdex-update-token": token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=0.5) as response:
+            return 200 <= response.status < 300
+    except Exception:
+        return False
+
+
+def snapshot() -> list[dict[str, Any]]:
+    index = session_index()
+    catalog = rollout_catalog()
+    titles = {row["id"]: row["title"] for row in index}
+    events: list[dict[str, Any]] = []
+    for session_id, path in recent_rollouts(catalog):
+        event = parse_rollout(path, titles.get(session_id, ""))
+        if event and initial_publishable(event, path):
+            events.append(event)
+        if len(events) >= MAX_WATCHES:
+            break
+    return events
+
+
+def run() -> int:
+    RUNTIME.mkdir(parents=True, exist_ok=True)
+    lock_handle = LOCK.open("a+")
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return 0
+    PID.write_text(str(os.getpid()), encoding="ascii")
+    watched: dict[str, dict[str, Any]] = {}
+    paths: dict[str, Path] = {}
+    titles: dict[str, str] = {}
+    last_discovery = 0.0
+
+    try:
+        while True:
+            now = time.monotonic()
+            if now - last_discovery >= DISCOVERY_SECONDS:
+                last_discovery = now
+                rows = session_index()
+                titles = {row["id"]: row["title"] for row in rows}
+                catalog = rollout_catalog()
+                discovered: dict[str, Path] = {}
+                for session_id, path in recent_rollouts(catalog):
+                    discovered[session_id] = path
+                    if len(discovered) >= MAX_WATCHES:
+                        break
+                paths = discovered
+
+            for session_id, path in list(paths.items()):
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                previous = watched.get(session_id)
+                title = titles.get(session_id, "")
+                if previous and previous.get("size") == size and previous.get("title") == title:
+                    continue
+                event = parse_rollout(path, title)
+                if not event:
+                    continue
+                event["conversation_key"] = session_id
+                event["source_session_id"] = session_id
+                event["session_id"] = session_id
+                event_hash = digest(event)
+                initial = previous is None
+                should_publish = not initial or initial_publishable(event, path)
+                delivered = not should_publish or post(event)
+                if delivered:
+                    watched[session_id] = {
+                        "size": size,
+                        "title": title,
+                        "hash": event_hash,
+                    }
+            time.sleep(FOLLOW_SECONDS)
+    finally:
+        try:
+            PID.unlink()
+        except OSError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    if "--snapshot" in sys.argv:
+        for item in snapshot():
+            print(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+        raise SystemExit(0)
+    raise SystemExit(run())

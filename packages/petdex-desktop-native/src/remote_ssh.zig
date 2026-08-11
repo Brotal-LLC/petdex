@@ -8,10 +8,12 @@
 //!   - BatchMode=yes: ssh must never block on a password prompt inside
 //!     an effect worker; auth failure is an exit code, not a hang.
 //!   - The destination is one argv element and every remote path is
-//!     single-quoted inside the remote command string, so a hostile
-//!     config value cannot become a remote shell injection.
-//!   - Remote paths use `~/` prefixes, expanded by the remote login
-//!     shell — the remote's home is never guessed from the desktop's.
+//!     quoted inside the remote command string, so a hostile config
+//!     value cannot become a remote shell injection.
+//!   - Remote `~/` paths become `"$HOME"/'...'`: the home prefix expands
+//!     safely while the path suffix remains literal. Quoting the entire
+//!     `~/...` string would suppress expansion and create a directory
+//!     literally named `~`.
 //!
 //! fx.spawn budget (16 argv elements / 2048 argv bytes / 4096 stdin
 //! bytes) shapes the write path: a file that fits stdin goes in one
@@ -40,16 +42,29 @@ pub const stdin_chunk = 3072;
 /// config works on both sides of the tunnel — a symlinked Zig binary
 /// on the desktop, a POSIX sh script on the remote.
 pub const remote_hook_script = "~/.petdex/bin/petdex-hook";
+pub const remote_codex_watcher = "~/.petdex/bin/petdex-codex-watch";
+pub const remote_hermes_watcher = "~/.petdex/bin/petdex-hermes-watch";
 pub const remote_token_file = "~/.petdex/runtime/update-token";
+pub const remote_host_file = "~/.petdex/runtime/remote-host";
 pub const remote_opencode_plugin = "~/.config/opencode/plugins/petdex.js";
 pub const remote_codex_hooks = "~/.codex/hooks.json";
 pub const remote_hermes_config = "~/.hermes/config.yaml";
 pub const remote_hermes_allowlist = "~/.hermes/shell-hooks-allowlist.json";
+pub const remote_hermes_plugin_manifest = "~/.hermes/plugins/petdex-desktop/plugin.yaml";
+pub const remote_hermes_plugin_init = "~/.hermes/plugins/petdex-desktop/__init__.py";
+
+const tunnel_supervisor_rel = ".petdex/runtime/ssh-tunnel-supervisor.sh";
+pub const tunnel_supervisor_script: []const u8 = @embedFile("assets/petdex-ssh-tunnel-supervisor.sh");
 
 /// The desktop hook server the tunnel exposes on the remote's
 /// loopback. Remote hook payloads post to 127.0.0.1:7777 there and ssh
 /// delivers them to 127.0.0.1:7777 here.
 pub const tunnel_spec = "127.0.0.1:7777:127.0.0.1:7777";
+
+/// The long-lived ssh command emits this only after the reverse forward can
+/// reach the desktop hook server. The runtime keeps the remote token absent
+/// until this marker arrives and the post-tunnel writeback completes.
+pub const tunnel_ready_marker = "petdex-tunnel-ready";
 
 /// Absolute paths first so a hijacked PATH cannot substitute ssh,
 /// matching installer's downloader probing.
@@ -71,15 +86,34 @@ pub fn detect() ?[]const u8 {
 pub const Scratch = struct {
     port: [12]u8 = undefined,
     identity: [384]u8 = undefined,
+    supervisor: [512]u8 = undefined,
+    parent_pid: [16]u8 = undefined,
+    reverse: [128]u8 = undefined,
     quote_a: [512]u8 = undefined,
     quote_b: [512]u8 = undefined,
+    quote_c: [512]u8 = undefined,
+    quote_d: [512]u8 = undefined,
+    quote_e: [512]u8 = undefined,
     cmd: [1024]u8 = undefined,
 };
 
+/// Install the small local wrapper that keeps a tunnel bounded by the
+/// desktop pid. Native's normal effects teardown already kills spawned
+/// children, but SIGTERM/crash paths cannot run it; without the wrapper,
+/// ssh is reparented to launchd and holds the remote port forever.
+pub fn installTunnelSupervisor(home: []const u8) bool {
+    var dir_buf: [512]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/.petdex/runtime", .{home}) catch return false;
+    plat.makeDir(dir);
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, tunnel_supervisor_rel }) catch return false;
+    return plat.writeFileMode(path, tunnel_supervisor_script, 0o700);
+}
+
 /// Quote one path for the remote shell. A leading `~/` becomes
-/// `"$HOME"/'...'` so the remote account's home expands while the
-/// suffix remains quoted. Other paths are wrapped in single quotes; any
-/// embedded quote becoming the classic '\'' sequence. Paths we invent
+/// `"$HOME"/'...'` so the remote account's home expands without leaving
+/// the suffix unquoted. Other paths are wrapped in single quotes, with
+/// embedded quotes using the classic '\'' sequence. Paths we invent
 /// never contain quotes, but a config-provided prefix could, and an
 /// unquoted metacharacter here is a remote command injection.
 pub fn shQuote(buf: []u8, path: []const u8) ?[]const u8 {
@@ -118,10 +152,12 @@ fn dirname(path: []const u8) []const u8 {
     return path[0..slash];
 }
 
-/// Shared SSH option prefix. Returns the next free argv index without
-/// writing the `-- <destination>` tail, because the reverse tunnel has
-/// additional SSH options that must precede the destination too.
-fn appendOptions(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?usize {
+/// Shared connection prefix: ssh, safety flags, optional port and
+/// identity, destination. Returns the next free argv index. The
+/// destination is always the element right before any remote command,
+/// never embedded in it. Flags use ssh's attached form (-oX, -pN, -iP)
+/// because fx.spawn caps argv at 16 elements and the tunnel adds six.
+fn appendBase(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?usize {
     const ssh = detect() orelse return null;
     var n: usize = 0;
     buf[n] = ssh;
@@ -147,49 +183,78 @@ fn appendOptions(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const R
         buf[n] = std.fmt.bufPrint(scratch.identity[0..], "-i{s}", .{identity}) catch return null;
         n += 1;
     }
+    buf[n] = "--";
+    n += 1;
+    buf[n] = remote.host;
+    n += 1;
     return n;
 }
 
-/// Append the option terminator and destination after all SSH switches.
-fn appendDestination(buf: *[max_argv][]const u8, n: usize, remote: *const Remote) ?usize {
-    if (n + 2 > max_argv) return null;
-    buf[n] = "--";
-    buf[n + 1] = remote.host;
-    return n + 2;
+/// Long-lived reverse tunnel: remote 127.0.0.1:7777 back to the desktop hook
+/// server. The remote command probes `/health`, emits `tunnel_ready_marker`,
+/// then sleeps for the connection lifetime. OpenSSH starts that command only
+/// after it has requested the reverse forward; ExitOnForwardFailure makes a
+/// rejected bind a fast failure rather than a false-ready connection.
+pub fn tunnelArgv(
+    buf: *[max_argv][]const u8,
+    scratch: *Scratch,
+    remote: *const Remote,
+    home: []const u8,
+    parent_pid: u32,
+) ?[]const []const u8 {
+    const n = appendBase(buf, scratch, remote) orelse return null;
+    if (n + 6 > max_argv) return null;
+    // appendBase ends with `-- <destination>`. Tunnel switches are ssh
+    // options, so insert them before that pair; the readiness/hold command is
+    // the sole argument after the destination. Attached -o/-R forms preserve
+    // three argv slots for the local supervisor wrapper while remaining
+    // inside fx.spawn's 16-arg cap.
+    const destination_idx = n - 2;
+    const separator = buf[destination_idx];
+    const destination = buf[destination_idx + 1];
+    buf[destination_idx] = "-oExitOnForwardFailure=yes";
+    buf[destination_idx + 1] = std.fmt.bufPrint(&scratch.reverse, "-R{s}", .{tunnel_spec}) catch return null;
+    buf[destination_idx + 2] = separator;
+    buf[destination_idx + 3] = destination;
+    buf[destination_idx + 4] = std.fmt.bufPrint(&scratch.cmd, "i=0; while :; do if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 1 http://127.0.0.1:7777/health >/dev/null 2>&1 && break; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:7777/health\",timeout=1).read()' >/dev/null 2>&1 && break; else exit 69; fi; i=$((i+1)); test \"$i\" -ge 20 && exit 75; sleep 1; done; printf '{s}\\n'; while :; do sleep 3600; done", .{tunnel_ready_marker}) catch return null;
+
+    const ssh_len = n + 3;
+    var i = ssh_len;
+    while (i > 0) {
+        i -= 1;
+        buf[i + 3] = buf[i];
+    }
+    buf[0] = "/bin/sh";
+    buf[1] = std.fmt.bufPrint(&scratch.supervisor, "{s}/{s}", .{ home, tunnel_supervisor_rel }) catch return null;
+    buf[2] = std.fmt.bufPrint(&scratch.parent_pid, "{d}", .{parent_pid}) catch return null;
+    return buf[0 .. n + 6];
 }
 
-/// Shared connection prefix for commands that do not need further SSH
-/// options. The destination is always its own argv element, never embedded
-/// in a remote command string.
-fn appendBase(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?usize {
-    const n = appendOptions(buf, scratch, remote) orelse return null;
-    return appendDestination(buf, n, remote);
-}
-
-/// Long-lived reverse tunnel: remote 127.0.0.1:7777 back to the
-/// desktop hook server. -N -T because no command runs and no pty is
-/// wanted; ExitOnForwardFailure turns a taken port into a fast exit so
-/// the supervisor's backoff sees a real failure instead of a silent
-/// half-open tunnel.
-pub fn tunnelArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?[]const []const u8 {
-    const n = appendOptions(buf, scratch, remote) orelse return null;
-    if (n + 8 > max_argv) return null;
-    buf[n] = "-N";
-    buf[n + 1] = "-T";
-    buf[n + 2] = "-o";
-    buf[n + 3] = "ExitOnForwardFailure=yes";
-    buf[n + 4] = "-R";
-    buf[n + 5] = tunnel_spec;
-    const end = appendDestination(buf, n + 6, remote) orelse return null;
-    return buf[0..end];
+/// Close the remote feed gate before a tunnel is allowed to start. Every
+/// remote sender reads `update-token` for each post, so removing it blocks old
+/// hooks immediately. Reconciler pid files are stopped as well; fresh ones are
+/// started only after the post-tunnel patch pass succeeds. The bounded drain
+/// covers a shell hook that read the old token just before its removal (the
+/// remote hook's HTTP timeout is two seconds).
+pub fn quiesceArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?[]const []const u8 {
+    const n = appendBase(buf, scratch, remote) orelse return null;
+    if (n + 1 > max_argv) return null;
+    const runtime = shQuote(&scratch.quote_a, "~/.petdex/runtime") orelse return null;
+    const token = shQuote(&scratch.quote_b, remote_token_file) orelse return null;
+    const codex_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/codex-watch.pid") orelse return null;
+    const hermes_pid = shQuote(&scratch.quote_d, "~/.petdex/runtime/hermes-watch.pid") orelse return null;
+    buf[n] = std.fmt.bufPrint(&scratch.cmd, "umask 077; mkdir -p {s}; rm -f {s}; for p in {s} {s}; do if test -r \"$p\"; then old=$(cat \"$p\"); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; rm -f \"$p\"; done; sleep 2", .{ runtime, token, codex_pid, hermes_pid }) catch return null;
+    return buf[0 .. n + 1];
 }
 
 /// Cheap reachability check: auth, network, and shell in one round
-/// trip. Exit 0 means the remote is manageable.
+/// trip. It also emits a named Hermes active profile when one exists, so
+/// writeback can merge into that profile's isolated home. Exit 0 means the
+/// remote is manageable even when Hermes is not installed.
 pub fn probeArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?[]const []const u8 {
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;
-    buf[n] = "true";
+    buf[n] = "if test -r \"$HOME/.hermes/active_profile\"; then printf 'petdex-hermes-profile='; head -n 1 \"$HOME/.hermes/active_profile\"; fi; true";
     return buf[0 .. n + 1];
 }
 
@@ -233,16 +298,48 @@ pub fn writeArgv(
     return buf[0 .. n + 1];
 }
 
-/// Push the hook-server update token after every hook_server.start()
-/// and tunnel reconnect: the remote hook script authenticates its
-/// posts with it. umask before cat so the file lands 0600 even on a
-/// permissive remote default.
+/// Open the remote feed gate after every successful post-tunnel patch pass.
+/// The token is written to a private temporary file and atomically renamed
+/// last, so an interrupted SSH write cannot expose a partial credential.
 pub fn tokenArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?[]const []const u8 {
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;
     const quoted = shQuote(&scratch.quote_a, remote_token_file) orelse return null;
     const dir = shQuote(&scratch.quote_b, dirname(remote_token_file)) orelse return null;
-    buf[n] = std.fmt.bufPrint(&scratch.cmd, "umask 077; mkdir -p {s} && cat > {s}", .{ dir, quoted }) catch return null;
+    const host_file = shQuote(&scratch.quote_c, remote_host_file) orelse return null;
+    buf[n] = std.fmt.bufPrint(&scratch.cmd, "umask 077; mkdir -p {s} || exit; tmp=\"$HOME/.petdex/runtime/update-token.tmp.$$\"; trap 'rm -f \"$tmp\"' 0 1 2 15; cat > \"$tmp\" && chmod 600 \"$tmp\" && hostname > {s} && mv -f \"$tmp\" {s}", .{ dir, host_file, quoted }) catch return null;
+    return buf[0 .. n + 1];
+}
+
+/// Start (or replace) the detached remote feed reconcilers. Each watcher owns
+/// a flock as a second guard, and every descriptor is redirected so the short
+/// SSH setup process can exit instead of holding an effects worker.
+pub fn watcherArgv(
+    buf: *[max_argv][]const u8,
+    scratch: *Scratch,
+    remote: *const Remote,
+    start_codex: bool,
+    start_hermes: bool,
+) ?[]const []const u8 {
+    if (!start_codex and !start_hermes) return null;
+    const n = appendBase(buf, scratch, remote) orelse return null;
+    if (n + 1 > max_argv) return null;
+    const runtime = shQuote(&scratch.quote_a, "~/.petdex/runtime") orelse return null;
+    if (start_codex and start_hermes) {
+        const codex = shQuote(&scratch.quote_b, remote_codex_watcher) orelse return null;
+        const codex_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/codex-watch.pid") orelse return null;
+        const hermes = shQuote(&scratch.quote_d, remote_hermes_watcher) orelse return null;
+        const hermes_pid = shQuote(&scratch.quote_e, "~/.petdex/runtime/hermes-watch.pid") orelse return null;
+        buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s}; if test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &\nif test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &", .{ runtime, codex_pid, codex_pid, codex, hermes_pid, hermes_pid, hermes }) catch return null;
+    } else if (start_codex) {
+        const codex = shQuote(&scratch.quote_b, remote_codex_watcher) orelse return null;
+        const codex_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/codex-watch.pid") orelse return null;
+        buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s}; if test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &", .{ runtime, codex_pid, codex_pid, codex }) catch return null;
+    } else {
+        const hermes = shQuote(&scratch.quote_b, remote_hermes_watcher) orelse return null;
+        const hermes_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/hermes-watch.pid") orelse return null;
+        buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s}; if test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &", .{ runtime, hermes_pid, hermes_pid, hermes }) catch return null;
+    }
     return buf[0 .. n + 1];
 }
 
@@ -288,10 +385,11 @@ test "appendBase puts safety flags before a quoted-free destination" {
     try t.expect(std.mem.indexOf(u8, text, "StrictHostKeyChecking=accept-new") != null);
     try t.expect(std.mem.indexOf(u8, text, "-p2222") != null);
     try t.expect(std.mem.indexOf(u8, text, "-i~/.ssh/id_ed25519") != null);
+    try t.expect(std.mem.indexOf(u8, text, "active_profile") != null);
     // Destination is its own argv element, immediately before the
     // remote command, and never quoted into it.
     try t.expectEqualStrings("shakib@rogue.lan", argv[argv.len - 2]);
-    try t.expectEqualStrings("true", argv[argv.len - 1]);
+    try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "active_profile") != null);
 }
 
 test "appendBase omits -p and -i at their defaults" {
@@ -310,16 +408,45 @@ test "tunnelArgv requests the reverse forward with fast failure" {
     if (detect() == null) return;
     var buf: [max_argv][]const u8 = undefined;
     var scratch: Scratch = .{};
-    const argv = tunnelArgv(&buf, &scratch, &test_remote).?;
-    try t.expectEqualStrings("--", argv[argv.len - 2]);
-    try t.expectEqualStrings(test_remote.host, argv[argv.len - 1]);
-    try t.expectEqualStrings(tunnel_spec, argv[argv.len - 3]);
+    const argv = tunnelArgv(&buf, &scratch, &test_remote, "/tmp/petdex-home", 4242).?;
+    try t.expectEqual(@as(usize, max_argv), argv.len);
+    try t.expectEqualStrings("/bin/sh", argv[0]);
+    try t.expectEqualStrings("/tmp/petdex-home/.petdex/runtime/ssh-tunnel-supervisor.sh", argv[1]);
+    try t.expectEqualStrings("4242", argv[2]);
+    try t.expectEqualStrings("/usr/bin/ssh", argv[3]);
+    // All tunnel switches are parsed locally by ssh. The only remote command
+    // probes the forwarded health endpoint before publishing readiness.
+    try t.expectEqualStrings("--", argv[argv.len - 3]);
+    try t.expectEqualStrings(test_remote.host, argv[argv.len - 2]);
+    try t.expectEqualStrings("-R" ++ tunnel_spec, argv[argv.len - 4]);
+    try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], tunnel_ready_marker) != null);
+    try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "/health") != null);
     var line: [1024]u8 = undefined;
     const text = joined(argv, &line);
-    try t.expect(std.mem.indexOf(u8, text, "-N") != null);
-    try t.expect(std.mem.indexOf(u8, text, "-T") != null);
+    try t.expect(std.mem.indexOf(u8, text, "-N") == null);
     try t.expect(std.mem.indexOf(u8, text, "ExitOnForwardFailure=yes") != null);
     try t.expect(std.mem.indexOf(u8, text, "-R") != null);
+}
+
+test "quiesceArgv removes token and stops both feed watchers" {
+    if (detect() == null) return;
+    var buf: [max_argv][]const u8 = undefined;
+    var scratch: Scratch = .{};
+    const argv = quiesceArgv(&buf, &scratch, &test_remote).?;
+    const command = argv[argv.len - 1];
+    try t.expect(std.mem.indexOf(u8, command, "rm -f \"$HOME\"/'.petdex/runtime/update-token'") != null);
+    try t.expect(std.mem.indexOf(u8, command, "codex-watch.pid") != null);
+    try t.expect(std.mem.indexOf(u8, command, "hermes-watch.pid") != null);
+    try t.expect(std.mem.indexOf(u8, command, "kill \"$old\"") != null);
+    try t.expect(std.mem.endsWith(u8, command, "sleep 2"));
+}
+
+test "tunnel supervisor is installed under the runtime directory" {
+    const home = ".zig-cache/petdex-ssh-supervisor-home";
+    try t.expect(installTunnelSupervisor(home));
+    var bytes: [2048]u8 = undefined;
+    const installed = plat.readFile(home ++ "/.petdex/runtime/ssh-tunnel-supervisor.sh", &bytes).?;
+    try t.expectEqualStrings(tunnel_supervisor_script, installed);
 }
 
 test "read and write quote remote paths for the remote shell" {
@@ -361,10 +488,37 @@ test "tokenArgv lands the token 0600 under ~/.petdex" {
     var buf: [max_argv][]const u8 = undefined;
     var scratch: Scratch = .{};
     const argv = tokenArgv(&buf, &scratch, &test_remote).?;
-    try t.expectEqualStrings(
-        "umask 077; mkdir -p \"$HOME\"/'.petdex/runtime' && cat > \"$HOME\"/'.petdex/runtime/update-token'",
-        argv[argv.len - 1],
-    );
+    const command = argv[argv.len - 1];
+    try t.expect(std.mem.indexOf(u8, command, "update-token.tmp.$$") != null);
+    try t.expect(std.mem.indexOf(u8, command, "chmod 600") != null);
+    try t.expect(std.mem.indexOf(u8, command, "hostname > \"$HOME\"/'.petdex/runtime/remote-host'") != null);
+    try t.expect(std.mem.indexOf(u8, command, "mv -f \"$tmp\" \"$HOME\"/'.petdex/runtime/update-token'") != null);
+}
+
+test "watcherArgv replaces the selected Petdesk watchers and detaches cleanly" {
+    if (detect() == null) return;
+    var buf: [max_argv][]const u8 = undefined;
+    var scratch: Scratch = .{};
+    const argv = watcherArgv(&buf, &scratch, &test_remote, true, false).?;
+    const command = argv[argv.len - 1];
+    try t.expect(std.mem.indexOf(u8, command, ".petdex/bin/petdex-codex-watch") != null);
+    try t.expect(std.mem.indexOf(u8, command, ".petdex/runtime/codex-watch.pid") != null);
+    try t.expect(std.mem.indexOf(u8, command, ".petdex/bin/petdex-hermes-watch") == null);
+    try t.expect(std.mem.indexOf(u8, command, "nohup") != null);
+    try t.expect(std.mem.indexOf(u8, command, "</dev/null &") != null);
+
+    var hermes_scratch: Scratch = .{};
+    const hermes = watcherArgv(&buf, &hermes_scratch, &test_remote, false, true).?;
+    const hermes_command = hermes[hermes.len - 1];
+    try t.expect(std.mem.indexOf(u8, hermes_command, ".petdex/bin/petdex-hermes-watch") != null);
+    try t.expect(std.mem.indexOf(u8, hermes_command, ".petdex/runtime/hermes-watch.pid") != null);
+    try t.expect(std.mem.indexOf(u8, hermes_command, ".petdex/bin/petdex-codex-watch") == null);
+
+    var both_scratch: Scratch = .{};
+    const both = watcherArgv(&buf, &both_scratch, &test_remote, true, true).?;
+    try t.expect(std.mem.indexOf(u8, both[both.len - 1], "petdex-codex-watch") != null);
+    try t.expect(std.mem.indexOf(u8, both[both.len - 1], "petdex-hermes-watch") != null);
+    try t.expect(watcherArgv(&buf, &scratch, &test_remote, false, false) == null);
 }
 
 test "chunkCount splits at the stdin budget" {

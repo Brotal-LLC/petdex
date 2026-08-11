@@ -118,11 +118,12 @@ pub const Msg = union(enum) {
     native_drag_started: ?State,
     native_drag_ended,
     native_drag_watchdog: native_sdk.EffectTimer,
+    remote_line: native_sdk.EffectLine,
     remote_done: native_sdk.EffectExit,
     remote_backoff: native_sdk.EffectTimer,
     noop,
 
-    pub const view_unbound = .{ "frame_tick", "poll_tick", "physics_tick", "frame_clock", "cycle_state", "native_drag_watchdog", "chime_done", "quit_app", "toggle_focus_mode", "shuffle_pet", "remote_done", "remote_backoff" };
+    pub const view_unbound = .{ "frame_tick", "poll_tick", "physics_tick", "frame_clock", "cycle_state", "native_drag_watchdog", "chime_done", "quit_app", "toggle_focus_mode", "shuffle_pet", "remote_line", "remote_done", "remote_backoff" };
 };
 
 pub const Model = struct {
@@ -1567,14 +1568,16 @@ fn runRemoteAction(model: *Model, slot_idx: usize, action: remote_runtime.Action
             var scratch: remote_ssh.Scratch = .{};
             const argv: ?[]const []const u8 = switch (spec.op) {
                 .probe => remote_ssh.probeArgv(&argv_buf, &scratch, &remote),
-                .fetch => blk: {
-                    var path_buf: [512]u8 = undefined;
-                    const path = std.fmt.bufPrint(&path_buf, "~/{s}", .{spec.path}) catch break :blk null;
-                    break :blk remote_ssh.readArgv(&argv_buf, &scratch, &remote, path);
-                },
+                .quiesce => remote_ssh.quiesceArgv(&argv_buf, &scratch, &remote),
+                .profile => remote_ssh.probeArgv(&argv_buf, &scratch, &remote),
+                .fetch => remote_ssh.readArgv(&argv_buf, &scratch, &remote, spec.path),
                 .push => remote_ssh.writeArgv(&argv_buf, &scratch, &remote, spec.path, spec.first_chunk, spec.executable),
                 .token => remote_ssh.tokenArgv(&argv_buf, &scratch, &remote),
-                .tunnel => remote_ssh.tunnelArgv(&argv_buf, &scratch, &remote),
+                .watcher => remote_ssh.watcherArgv(&argv_buf, &scratch, &remote, spec.watch_codex, spec.watch_hermes),
+                .tunnel => if (env_home) |home|
+                    remote_ssh.tunnelArgv(&argv_buf, &scratch, &remote, home, plat.processId())
+                else
+                    null,
                 .none => null,
             };
             const final_argv = argv orelse {
@@ -1587,6 +1590,7 @@ fn runRemoteAction(model: *Model, slot_idx: usize, action: remote_runtime.Action
                 .argv = final_argv,
                 .stdin = if (spec.stdin.len > 0) spec.stdin else null,
                 .output = if (is_tunnel) .lines else .collect,
+                .on_line = if (is_tunnel) Effects.lineMsg(.remote_line) else null,
                 .on_exit = Effects.exitMsg(.remote_done),
             });
         },
@@ -1599,6 +1603,10 @@ fn runRemoteAction(model: *Model, slot_idx: usize, action: remote_runtime.Action
 fn startRemotes(model: *Model, fx: *Effects) void {
     const home = env_home orelse return;
     if (remote_ssh.detect() == null) return;
+    if (!remote_ssh.installTunnelSupervisor(home)) {
+        std.debug.print("petdex: could not install the ssh tunnel supervisor; remotes disabled\n", .{});
+        return;
+    }
     const cfg = remote_agents.load(boot_allocator, home) orelse {
         std.debug.print("petdex: ~/.petdex/remote-agents.json is not valid JSON; remotes disabled\n", .{});
         return;
@@ -1939,13 +1947,27 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (model.waiting_sound) playWaitingChime(fx);
         },
         .chime_done => {},
+        .remote_line => |line| {
+            const decoded = remote_runtime.slotOpFromKey(line.key) orelse return;
+            if (decoded.slot >= model.remote_count) return;
+            const action = remote_runtime.onSpawnLine(&model.remotes[decoded.slot], decoded.op, line.line);
+            runRemoteAction(model, decoded.slot, action, fx);
+        },
         .remote_done => |exit| {
             const decoded = remote_runtime.slotOpFromKey(exit.key) orelse return;
             if (decoded.slot >= model.remote_count) return;
             const home = env_home orelse return;
             const slot = &model.remotes[decoded.slot];
             if (exit.reason == .cancelled) return;
-            if (exit.reason == .rejected) return;
+            if (decoded.op == .tunnel) {
+                // A tunnel can die while a short post-ready sync SSH process
+                // is in flight. Cancel every gated phase before scheduling
+                // reconnect so no stale completion can reopen the token.
+                inline for (.{ remote_runtime.Op.profile, remote_runtime.Op.fetch, remote_runtime.Op.push, remote_runtime.Op.token, remote_runtime.Op.watcher }) |op| {
+                    fx.cancel(remote_runtime.keyFor(decoded.slot, op));
+                }
+                fx.cancel(remote_runtime.backoffKey(decoded.slot));
+            }
             const action = remote_runtime.onSpawnExit(slot, decoded.slot, decoded.op, exit.code, exit.output, home);
             runRemoteAction(model, decoded.slot, action, fx);
         },

@@ -1,11 +1,11 @@
 //! Remote runtime driver: the per-remote state machine that sequences
-//! probe -> fetch-merge-writeback -> token push -> tunnel, plus tunnel
-//! reconnect backoff. Pure of SDK types: it returns Actions and main.zig
+//! probe -> quiesce -> tunnel readiness -> fetch-merge-writeback -> token ->
+//! watchers, plus reconnect/sync backoff. Pure of SDK types: it returns Actions and main.zig
 //! turns them into fx.spawn / fx.startTimer calls, so the whole flow is
 //! unit-testable with fixture homes and no effects runtime.
 //!
-//! One writeback pass runs per remote per app run (boot or a Settings
-//! sync action); the tunnel then runs for the app's lifetime, respawned
+//! One writeback pass runs after every successful tunnel establishment, before
+//! the token gate opens. The tunnel runs for the app's lifetime, respawned
 //! with backoff when it dies. fs work (staging fetched bytes, running
 //! the local installers against the fake home) happens inside the
 //! driver via plat, not in main.zig.
@@ -23,7 +23,7 @@ pub const max_remotes = 8;
 
 /// Spawn kinds a slot can have in flight. Key derivation tags the
 /// slot's key with these; backoff rides a timer tag instead.
-pub const Op = enum { none, probe, fetch, push, token, tunnel };
+pub const Op = enum { none, probe, quiesce, tunnel, profile, fetch, push, token, watcher };
 
 /// Key space far above the hand-numbered single-digit keys main.zig
 /// uses for its own effects. 16 tags per slot leaves room.
@@ -36,7 +36,10 @@ fn opTag(op: Op) u64 {
         .fetch => 2,
         .push => 3,
         .token => 4,
-        .tunnel => 5,
+        .watcher => 5,
+        .tunnel => 6,
+        .quiesce => 7,
+        .profile => 8,
     };
 }
 
@@ -57,7 +60,7 @@ pub fn slotOpFromKey(key: u64) ?struct { slot: usize, op: Op } {
     const tag = off % 16;
     const slot = off / 16;
     if (slot >= max_remotes) return null;
-    inline for ([_]Op{ .probe, .fetch, .push, .token, .tunnel }) |op| {
+    inline for ([_]Op{ .probe, .quiesce, .tunnel, .profile, .fetch, .push, .token, .watcher }) |op| {
         if (opTag(op) == tag) return .{ .slot = slot, .op = op };
     }
     return null;
@@ -86,6 +89,12 @@ pub const Slot = struct {
     kinds: [3]AgentKind = undefined,
     kind_count: usize = 0,
     op: Op = .none,
+    /// Reverse forward passed its remote `/health` probe. This is separate
+    /// from `op`: the tunnel remains alive while short sync SSH jobs run.
+    tunnel_ready: bool = false,
+    /// Hooks were patched, the fresh token was installed, and reconcilers
+    /// started for this exact tunnel establishment.
+    sync_complete: bool = false,
     probe_failed: bool = false,
     wb_failed: bool = false,
     kind_idx: usize = 0,
@@ -93,9 +102,20 @@ pub const Slot = struct {
     output_idx: usize = 0,
     chunk_idx: usize = 0,
     backoff_ms: u32 = 0,
+    /// Named Hermes profile discovered from `~/.hermes/active_profile`.
+    /// Empty means the default Hermes home remains authoritative.
+    hermes_profile: [64]u8 = @splat(0),
+    hermes_profile_len: usize = 0,
+    /// Dynamic remote fetch path. Action slices must remain valid until the
+    /// effect is spawned, so this lives in the slot rather than a stack frame.
+    remote_path: [512]u8 = @splat(0),
 
     pub fn nameSlice(self: *const Slot) []const u8 {
         return self.name[0..self.name_len];
+    }
+
+    pub fn hermesProfileSlice(self: *const Slot) []const u8 {
+        return self.hermes_profile[0..self.hermes_profile_len];
     }
 };
 
@@ -130,6 +150,8 @@ pub const Spawn = struct {
     stdin: []const u8 = "",
     first_chunk: bool = false,
     executable: bool = false,
+    watch_codex: bool = false,
+    watch_hermes: bool = false,
 };
 
 /// Fill slots from a loaded config, skipping invalid remotes (logged,
@@ -187,14 +209,41 @@ pub fn fakeHome(buf: []u8, home: []const u8, slot: *const Slot) ?[]const u8 {
 
 /// Boot action for a slot: probe first.
 pub fn startAction(slot: *Slot) Action {
+    slot.tunnel_ready = false;
+    slot.sync_complete = false;
+    slot.probe_failed = false;
+    slot.wb_failed = false;
+    slot.backoff_ms = 0;
+    return probeAction(slot);
+}
+
+fn probeAction(slot: *Slot) Action {
     slot.op = .probe;
     return .{ .spawn = .{ .op = .probe } };
 }
 
+fn quiesceAction(slot: *Slot) Action {
+    slot.op = .quiesce;
+    slot.tunnel_ready = false;
+    slot.sync_complete = false;
+    return .{ .spawn = .{ .op = .quiesce } };
+}
+
+fn profileAction(slot: *Slot) Action {
+    slot.op = .profile;
+    return .{ .spawn = .{ .op = .profile } };
+}
+
 fn fetchAction(slot: *Slot) Action {
     const files = remote_writeback.filesOf(slot.kinds[slot.kind_idx]);
+    const path = remote_writeback.remotePath(
+        &slot.remote_path,
+        slot.kinds[slot.kind_idx],
+        files[slot.file_idx],
+        slot.hermesProfileSlice(),
+    ) orelse return .none;
     slot.op = .fetch;
-    return .{ .spawn = .{ .op = .fetch, .path = files[slot.file_idx] } };
+    return .{ .spawn = .{ .op = .fetch, .path = path } };
 }
 
 fn tokenAction(slot: *Slot, slot_idx: usize, home: []const u8) Action {
@@ -210,26 +259,58 @@ fn tokenAction(slot: *Slot, slot_idx: usize, home: []const u8) Action {
 
 fn tunnelAction(slot: *Slot) Action {
     slot.op = .tunnel;
-    slot.backoff_ms = 0;
+    slot.tunnel_ready = false;
+    slot.sync_complete = false;
     return .{ .spawn = .{ .op = .tunnel } };
 }
 
+fn hasKind(slot: *const Slot, wanted: AgentKind) bool {
+    for (slot.kinds[0..slot.kind_count]) |kind| {
+        if (kind == wanted) return true;
+    }
+    return false;
+}
+
+fn finishSync(slot: *Slot) Action {
+    slot.op = .none;
+    slot.sync_complete = true;
+    slot.wb_failed = false;
+    slot.backoff_ms = 0;
+    return .none;
+}
+
+fn watcherOrFinish(slot: *Slot) Action {
+    const watch_codex = hasKind(slot, .codex);
+    const watch_hermes = hasKind(slot, .hermes);
+    if (watch_codex or watch_hermes) {
+        slot.op = .watcher;
+        return .{ .spawn = .{
+            .op = .watcher,
+            .watch_codex = watch_codex,
+            .watch_hermes = watch_hermes,
+        } };
+    }
+    return finishSync(slot);
+}
+
 /// Advance after the current agent's last fetch staged: run the local
-/// installer against the fake home and start pushing outputs. Falls
-/// through to the next agent when the installer or collection fails
-/// (marked, never silent).
+/// installer against the fake home and start pushing outputs. Any local
+/// preparation failure keeps the remote feed gate closed and retries.
 fn beginPushOrNextKind(slot: *Slot, slot_idx: usize, home: []const u8) Action {
     var home_buf: [512]u8 = undefined;
-    const fake = fakeHome(&home_buf, home, slot) orelse return nextKind(slot, slot_idx, home);
+    const fake = fakeHome(&home_buf, home, slot) orelse return retry(slot, true);
     if (!remote_writeback.runInstaller(wb_arena, slot.kinds[slot.kind_idx], fake)) {
         std.debug.print("petdex: remote '{s}': writeback install failed for {s}\n", .{ slot.nameSlice(), slot.kinds[slot.kind_idx].hookAgentName() });
-        slot.wb_failed = true;
-        return nextKind(slot, slot_idx, home);
+        return retry(slot, true);
     }
-    outputs[slot_idx] = remote_writeback.collectOutputs(wb_arena, slot.kinds[slot.kind_idx], fake);
+    outputs[slot_idx] = remote_writeback.collectOutputs(
+        wb_arena,
+        slot.kinds[slot.kind_idx],
+        fake,
+        slot.hermesProfileSlice(),
+    );
     if (outputs[slot_idx] == null) {
-        slot.wb_failed = true;
-        return nextKind(slot, slot_idx, home);
+        return retry(slot, true);
     }
     slot.output_idx = 0;
     slot.chunk_idx = 0;
@@ -257,37 +338,83 @@ fn nextKind(slot: *Slot, slot_idx: usize, home: []const u8) Action {
     slot.output_idx = 0;
     slot.chunk_idx = 0;
     if (slot.kind_idx < slot.kind_count) return fetchAction(slot);
-    // No token on disk means no hook server: still bring the tunnel
-    // up so it exists when the server appears.
-    return tokenOrTunnel(slot, slot_idx, home);
+    return tokenOrRetry(slot, slot_idx, home);
 }
 
-fn tokenOrTunnel(slot: *Slot, slot_idx: usize, home: []const u8) Action {
+fn nextRetryDelay(slot: *Slot) u32 {
+    if (slot.backoff_ms == 0) {
+        slot.backoff_ms = 5000;
+    } else {
+        slot.backoff_ms = @min(slot.backoff_ms * 3, 60000);
+    }
+    return slot.backoff_ms;
+}
+
+fn retry(slot: *Slot, sync_failed: bool) Action {
+    slot.op = .none;
+    slot.sync_complete = false;
+    if (sync_failed) slot.wb_failed = true;
+    return .{ .backoff = nextRetryDelay(slot) };
+}
+
+fn tokenOrRetry(slot: *Slot, slot_idx: usize, home: []const u8) Action {
     const act = tokenAction(slot, slot_idx, home);
     if (act != .none) return act;
-    return tunnelAction(slot);
+    // The local hook server owns this token. Without it the remote stays
+    // deliberately gated and retries rather than starting unauthenticated
+    // watchers or exposing stale hooks.
+    return retry(slot, true);
 }
 
 /// Drive one slot past a finished spawn. `output` is the collected
 /// stdout (valid only during this call — staging copies it to disk
 /// before returning).
 pub fn onSpawnExit(slot: *Slot, slot_idx: usize, op: Op, code: i32, output: []const u8, home: []const u8) Action {
+    // Tunnel teardown can race a short sync SSH process. The teardown resets
+    // `slot.op`; ignore that stale completion so it cannot reopen the token
+    // gate during a later reconnect cycle.
+    if (op != .tunnel and slot.op != op) return .none;
     switch (op) {
         .probe => {
             if (code != 0) {
-                // Auth/network is broken; writeback would fail the same
-                // way. Still bring the tunnel up: it retries with
-                // backoff and the remote may simply be asleep.
                 slot.probe_failed = true;
-                std.debug.print("petdex: remote '{s}': probe failed (ssh exit {d}); tunnel will retry\n", .{ slot.nameSlice(), code });
-                return tokenOrTunnel(slot, slot_idx, home);
+                std.debug.print("petdex: remote '{s}': probe failed (ssh exit {d}); retrying before tunnel\n", .{ slot.nameSlice(), code });
+                return retry(slot, false);
             }
+            slot.probe_failed = false;
+            setHermesProfile(slot, output);
+            return quiesceAction(slot);
+        },
+        .quiesce => {
+            if (code != 0) {
+                slot.probe_failed = true;
+                std.debug.print("petdex: remote '{s}': feed gate failed (ssh exit {d}); tunnel withheld\n", .{ slot.nameSlice(), code });
+                return retry(slot, false);
+            }
+            slot.probe_failed = false;
+            return tunnelAction(slot);
+        },
+        .profile => {
+            if (code != 0) {
+                std.debug.print("petdex: remote '{s}': post-tunnel profile check failed (ssh exit {d}); feed remains gated\n", .{ slot.nameSlice(), code });
+                return retry(slot, true);
+            }
+            setHermesProfile(slot, output);
             slot.kind_idx = 0;
             slot.file_idx = 0;
-            if (slot.kind_count == 0) return tokenOrTunnel(slot, slot_idx, home);
+            slot.output_idx = 0;
+            slot.chunk_idx = 0;
+            if (slot.kind_count == 0) return tokenOrRetry(slot, slot_idx, home);
             return fetchAction(slot);
         },
         .fetch => {
+            // `cat` exit 1 is the expected fresh-install/missing-file case.
+            // SSH and shell failures are not: opening the token after either
+            // would expose an unverified installation.
+            if (code != 0 and code != 1) {
+                std.debug.print("petdex: remote '{s}': hook check failed (ssh exit {d}); feed remains gated\n", .{ slot.nameSlice(), code });
+                return retry(slot, true);
+            }
             const files = remote_writeback.filesOf(slot.kinds[slot.kind_idx]);
             const rel = files[slot.file_idx];
             var home_buf: [512]u8 = undefined;
@@ -308,9 +435,8 @@ pub fn onSpawnExit(slot: *Slot, slot_idx: usize, op: Op, code: i32, output: []co
         },
         .push => {
             if (code != 0) {
-                std.debug.print("petdex: remote '{s}': push failed (ssh exit {d})\n", .{ slot.nameSlice(), code });
-                slot.wb_failed = true;
-                return nextKindAfterAbort(slot, slot_idx, home);
+                std.debug.print("petdex: remote '{s}': auto-patch failed (ssh exit {d}); feed remains gated\n", .{ slot.nameSlice(), code });
+                return retry(slot, true);
             }
             const outs = outputs[slot_idx].?;
             const out = outs[slot.output_idx];
@@ -322,47 +448,106 @@ pub fn onSpawnExit(slot: *Slot, slot_idx: usize, op: Op, code: i32, output: []co
             if (slot.output_idx < outs.len) return pushAction(slot, slot_idx);
             return nextKind(slot, slot_idx, home);
         },
-        .token => return tunnelAction(slot),
+        .token => {
+            if (code != 0) {
+                std.debug.print("petdex: remote '{s}': token gate open failed (ssh exit {d}); retrying\n", .{ slot.nameSlice(), code });
+                return retry(slot, true);
+            }
+            return watcherOrFinish(slot);
+        },
+        .watcher => {
+            const failed = code != 0;
+            if (code != 0) {
+                // Patches and token are already authoritative. Keep regular
+                // lifecycle hooks live; a later reconnect retries watcher
+                // startup without rolling the remote back to stale code.
+                std.debug.print("petdex: remote '{s}': watcher startup failed (ssh exit {d})\n", .{ slot.nameSlice(), code });
+            }
+            const action = finishSync(slot);
+            slot.wb_failed = failed;
+            return action;
+        },
         .tunnel => {
             // Any tunnel exit is a reconnect: ssh only exits when the
             // connection dropped (ExitOnForwardFailure makes a taken
             // port a fast exit too).
             slot.op = .none;
-            if (slot.backoff_ms == 0) {
-                slot.backoff_ms = 5000;
-            } else {
-                slot.backoff_ms = @min(slot.backoff_ms * 3, 60000);
-            }
-            return .{ .backoff = slot.backoff_ms };
+            slot.tunnel_ready = false;
+            slot.sync_complete = false;
+            return .{ .backoff = nextRetryDelay(slot) };
         },
         .none => return .none,
     }
 }
 
-/// Skip the rest of the writeback after a push failure, straight to
-/// token + tunnel.
-fn nextKindAfterAbort(slot: *Slot, slot_idx: usize, home: []const u8) Action {
-    slot.kind_idx = slot.kind_count;
-    return tokenOrTunnel(slot, slot_idx, home);
+/// First readiness marker for a newly established long-lived tunnel starts
+/// the authoritative post-tunnel check/patch pass. Duplicate/noisy stdout is
+/// ignored and cannot restart sync.
+pub fn onSpawnLine(slot: *Slot, op: Op, line: []const u8) Action {
+    if (op != .tunnel or slot.op != .tunnel or slot.tunnel_ready) return .none;
+    if (!std.mem.eql(u8, std.mem.trim(u8, line, " \t\r\n"), remote_ssh.tunnel_ready_marker)) return .none;
+    slot.tunnel_ready = true;
+    slot.sync_complete = false;
+    slot.wb_failed = false;
+    slot.backoff_ms = 0;
+    return profileAction(slot);
 }
 
-/// Backoff timer fired: re-push the token, whose completion spawns the
-/// tunnel. If the token push itself cannot read a token (hook server
-/// gone), spawn the tunnel directly.
+fn isProfileName(value: []const u8) bool {
+    if (value.len == 0 or value.len > 64) return false;
+    if (!std.ascii.isAlphanumeric(value[0])) return false;
+    for (value[1..]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_') return false;
+    }
+    return true;
+}
+
+/// Probe output is remote-controlled input, so accept only Hermes' documented
+/// profile-id alphabet before it becomes part of a later remote path. Invalid
+/// or `default` content deliberately falls back to the normal Hermes home.
+fn setHermesProfile(slot: *Slot, output: []const u8) void {
+    slot.hermes_profile_len = 0;
+    const marker = "petdex-hermes-profile=";
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, marker)) continue;
+        const candidate = std.mem.trim(u8, line[marker.len..], " \t\r\n");
+        if (std.mem.eql(u8, candidate, "default") or !isProfileName(candidate)) return;
+        @memcpy(slot.hermes_profile[0..candidate.len], candidate);
+        slot.hermes_profile_len = candidate.len;
+        return;
+    }
+}
+
+/// Backoff timer fired. A live, gated tunnel retries its verification/patch
+/// pass. A dead tunnel must pass probe + quiesce again before reconnecting.
 pub fn onBackoff(slot: *Slot, slot_idx: usize, home: []const u8) Action {
-    return tokenOrTunnel(slot, slot_idx, home);
+    _ = slot_idx;
+    _ = home;
+    if (slot.tunnel_ready) return profileAction(slot);
+    return probeAction(slot);
 }
 
 /// One-line status for the Settings row. Failures win over progress:
 /// a tunnel that is up while the sync failed must not read as
 /// "Connected".
 pub fn statusCaption(slot: *const Slot) []const u8 {
+    if (slot.tunnel_ready and slot.sync_complete) {
+        return if (slot.wb_failed) "Connected; watcher unavailable" else "Connected";
+    }
     return switch (slot.op) {
         .probe => "Connecting…",
-        .fetch, .push => "Syncing agent hooks…",
-        .token => "Finishing setup…",
-        .tunnel => if (slot.probe_failed or slot.wb_failed) "Tunnel up; sync failed" else "Connected",
-        .none => if (slot.backoff_ms > 0) "Reconnecting…" else "Idle",
+        .quiesce => "Securing remote feed…",
+        .tunnel => "Opening secure tunnel…",
+        .profile, .fetch, .push => "Checking and patching hooks…",
+        .token => "Enabling remote feed…",
+        .watcher => "Starting remote feeds…",
+        .none => if (slot.tunnel_ready)
+            (if (slot.wb_failed) "Tunnel up; patch retrying…" else "Tunnel up; setup retrying…")
+        else if (slot.backoff_ms > 0)
+            "Reconnecting…"
+        else
+            "Idle",
     };
 }
 
@@ -388,15 +573,62 @@ test "statusCaption puts failures ahead of progress" {
     slot.op = .probe;
     try t.expectEqualStrings("Connecting…", statusCaption(&slot));
     slot.op = .fetch;
-    try t.expectEqualStrings("Syncing agent hooks…", statusCaption(&slot));
-    slot.op = .tunnel;
+    try t.expectEqualStrings("Checking and patching hooks…", statusCaption(&slot));
+    slot.op = .watcher;
+    try t.expectEqualStrings("Starting remote feeds…", statusCaption(&slot));
+    slot.op = .none;
+    slot.tunnel_ready = true;
+    slot.sync_complete = true;
     try t.expectEqualStrings("Connected", statusCaption(&slot));
     slot.wb_failed = true;
-    try t.expectEqualStrings("Tunnel up; sync failed", statusCaption(&slot));
+    try t.expectEqualStrings("Connected; watcher unavailable", statusCaption(&slot));
+    slot.tunnel_ready = false;
+    slot.sync_complete = false;
     slot.op = .none;
     try t.expectEqualStrings("Idle", statusCaption(&slot));
     slot.backoff_ms = 5000;
     try t.expectEqualStrings("Reconnecting…", statusCaption(&slot));
+}
+
+test "named Hermes profile routes writeback to the live profile" {
+    var slot: Slot = .{};
+    slot.active = true;
+    slot.kinds[0] = .hermes;
+    slot.kind_count = 1;
+
+    slot.op = .profile;
+    slot.tunnel_ready = true;
+    const action = onSpawnExit(&slot, 0, .profile, 0, "petdex-hermes-profile=snoop\n", ".zig-cache/petdex-remote-profile");
+    switch (action) {
+        .spawn => |spec| {
+            try t.expectEqual(Op.fetch, spec.op);
+            try t.expectEqualStrings("~/.hermes/profiles/snoop/config.yaml", spec.path);
+        },
+        else => try t.expect(false),
+    }
+}
+
+test "Hermes remote starts its metadata reconciler" {
+    var slot: Slot = .{};
+    slot.kinds[0] = .hermes;
+    slot.kind_count = 1;
+    const action = watcherOrFinish(&slot);
+    switch (action) {
+        .spawn => |spec| {
+            try t.expectEqual(Op.watcher, spec.op);
+            try t.expect(!spec.watch_codex);
+            try t.expect(spec.watch_hermes);
+        },
+        else => try t.expect(false),
+    }
+}
+
+test "invalid remote profile output falls back to the default Hermes home" {
+    var slot: Slot = .{};
+    setHermesProfile(&slot, "petdex-hermes-profile=../../other\n");
+    try t.expectEqual(@as(usize, 0), slot.hermes_profile_len);
+    setHermesProfile(&slot, "petdex-hermes-profile=default\n");
+    try t.expectEqual(@as(usize, 0), slot.hermes_profile_len);
 }
 
 test "key derivation round-trips and rejects foreign keys" {
@@ -433,7 +665,7 @@ test "fillFromConfig copies valid remotes and skips the rest" {
     try t.expectEqual(AgentKind.codex, slots[0].kinds[0]);
 }
 
-test "driver walks probe -> fetch -> push -> token -> tunnel -> backoff" {
+test "driver gates feed until tunnel-ready patch pass completes" {
     const home = ".zig-cache/petdex-rt-home";
     plat.makeDir(home);
     plat.makeDir(home ++ "/.petdex/runtime");
@@ -444,16 +676,30 @@ test "driver walks probe -> fetch -> push -> token -> tunnel -> backoff" {
     var slot = testSlot();
     const idx = 0;
 
-    // Probe failure jumps to token, flags it, never spins a fetch.
+    // Probe failure never starts a tunnel or opens the token gate.
     var probe_failed_slot = testSlot();
+    _ = startAction(&probe_failed_slot);
     var act = onSpawnExit(&probe_failed_slot, idx, .probe, 255, "", home);
-    try t.expect(act == .spawn and act.spawn.op == .token);
+    try t.expect(act == .backoff and act.backoff == 5000);
     try t.expect(probe_failed_slot.probe_failed);
+    try t.expect(!probe_failed_slot.tunnel_ready);
 
-    // Happy path: probe -> fetch of opencode's single file.
+    // Happy path: probe -> gate old senders -> long-lived tunnel. No fetch
+    // starts until the tunnel's remote health check publishes readiness.
+    _ = startAction(&slot);
     act = onSpawnExit(&slot, idx, .probe, 0, "", home);
+    try t.expect(act == .spawn and act.spawn.op == .quiesce);
+    act = onSpawnExit(&slot, idx, .quiesce, 0, "", home);
+    try t.expect(act == .spawn and act.spawn.op == .tunnel);
+    act = onSpawnLine(&slot, .tunnel, "unrelated output");
+    try t.expect(act == .none);
+    act = onSpawnLine(&slot, .tunnel, remote_ssh.tunnel_ready_marker);
+    try t.expect(act == .spawn and act.spawn.op == .profile);
+    try t.expect(slot.tunnel_ready);
+    try t.expect(!slot.sync_complete);
+    act = onSpawnExit(&slot, idx, .profile, 0, "", home);
     try t.expect(act == .spawn and act.spawn.op == .fetch);
-    try t.expectEqualStrings(".config/opencode/plugins/petdex.js", act.spawn.path);
+    try t.expectEqualStrings("~/.config/opencode/plugins/petdex.js", act.spawn.path);
 
     // Fetch miss (exit 1) stages nothing; opencode's last file moves
     // straight into push (installer runs inside the driver).
@@ -461,21 +707,21 @@ test "driver walks probe -> fetch -> push -> token -> tunnel -> backoff" {
     try t.expect(act == .spawn and act.spawn.op == .push);
     try t.expect(act.spawn.first_chunk);
 
-    // The plugin (8301 bytes) is three chunks; walk them, then the
-    // codex fetch begins.
-    act = onSpawnExit(&slot, idx, .push, 0, "", home);
-    try t.expect(act == .spawn and act.spawn.op == .push and !act.spawn.first_chunk);
-    act = onSpawnExit(&slot, idx, .push, 0, "", home);
-    try t.expect(act == .spawn and act.spawn.op == .push and !act.spawn.first_chunk);
-    act = onSpawnExit(&slot, idx, .push, 0, "", home);
+    // Walk however many bounded chunks the generated plugin currently needs;
+    // metadata fields may grow it without changing the state-machine contract.
+    var plugin_guard: usize = 0;
+    while (act == .spawn and act.spawn.op == .push and plugin_guard < 16) {
+        act = onSpawnExit(&slot, idx, .push, 0, "", home);
+        plugin_guard += 1;
+    }
     try t.expect(act == .spawn and act.spawn.op == .fetch);
-    try t.expectEqualStrings(".codex/hooks.json", act.spawn.path);
+    try t.expectEqualStrings("~/.codex/hooks.json", act.spawn.path);
 
     // Codex: two fetches, then pushes (hooks.json, config.toml, hook
-    // script), then token, then tunnel.
+    // script), then atomically opens the token gate and starts watchers.
     act = onSpawnExit(&slot, idx, .fetch, 1, "", home);
     try t.expect(act == .spawn and act.spawn.op == .fetch);
-    try t.expectEqualStrings(".codex/config.toml", act.spawn.path);
+    try t.expectEqualStrings("~/.codex/config.toml", act.spawn.path);
     act = onSpawnExit(&slot, idx, .fetch, 1, "", home);
     try t.expect(act == .spawn and act.spawn.op == .push);
 
@@ -488,30 +734,44 @@ test "driver walks probe -> fetch -> push -> token -> tunnel -> backoff" {
     try t.expectEqualStrings("tok-abc", act.spawn.stdin);
 
     act = onSpawnExit(&slot, idx, .token, 0, "", home);
-    try t.expect(act == .spawn and act.spawn.op == .tunnel);
+    try t.expect(act == .spawn and act.spawn.op == .watcher);
+    act = onSpawnExit(&slot, idx, .watcher, 0, "", home);
+    try t.expect(act == .none);
+    try t.expect(slot.tunnel_ready);
+    try t.expect(slot.sync_complete);
 
-    // Tunnel death: 5s backoff, tripling, capped at 60s.
+    // Tunnel death closes runtime state and retries probe/quiesce first. A
+    // connection that dies again before readiness increases the backoff.
     act = onSpawnExit(&slot, idx, .tunnel, 255, "", home);
     try t.expect(act == .backoff and act.backoff == 5000);
     act = onBackoff(&slot, idx, home);
-    try t.expect(act == .spawn and act.spawn.op == .token);
-    slot.op = .none;
+    try t.expect(act == .spawn and act.spawn.op == .probe);
+    act = onSpawnExit(&slot, idx, .probe, 0, "", home);
+    try t.expect(act == .spawn and act.spawn.op == .quiesce);
+    act = onSpawnExit(&slot, idx, .quiesce, 0, "", home);
+    try t.expect(act == .spawn and act.spawn.op == .tunnel);
     act = onSpawnExit(&slot, idx, .tunnel, 255, "", home);
     try t.expect(act == .backoff and act.backoff == 15000);
-    slot.op = .none;
     slot.backoff_ms = 30000;
     act = onSpawnExit(&slot, idx, .tunnel, 255, "", home);
     try t.expect(act == .backoff and act.backoff == 60000);
 }
 
-test "push failure aborts writeback but still reaches the tunnel" {
+test "push failure keeps live tunnel gated and schedules patch retry" {
     const home = ".zig-cache/petdex-rt-home";
     var slot = testSlot();
     const idx = 1;
+    _ = startAction(&slot);
     _ = onSpawnExit(&slot, idx, .probe, 0, "", home);
+    _ = onSpawnExit(&slot, idx, .quiesce, 0, "", home);
+    _ = onSpawnLine(&slot, .tunnel, remote_ssh.tunnel_ready_marker);
+    _ = onSpawnExit(&slot, idx, .profile, 0, "", home);
     const act = onSpawnExit(&slot, idx, .fetch, 1, "", home);
     try t.expect(act == .spawn and act.spawn.op == .push);
     const after = onSpawnExit(&slot, idx, .push, 255, "", home);
-    try t.expect(after == .spawn and after.spawn.op == .token);
+    try t.expect(after == .backoff and after.backoff == 5000);
     try t.expect(slot.wb_failed);
+    try t.expect(slot.tunnel_ready);
+    try t.expect(!slot.sync_complete);
+    try t.expect(slot.op == .none);
 }
