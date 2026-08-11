@@ -656,7 +656,10 @@ jobs:
           TOKEN=$(cat ~/.petdex/runtime/update-token)
           echo '{"tool_name":"Bash","session_id":"ci"}' | ~/.petdex/bin/petdex-hook bubble pre codex
           sleep 1
-          curl -fsS http://127.0.0.1:7777/state | grep -q '"state":"running"' || {
+          # The hook server deliberately alternates running-left and
+          # running-right sprite variants.  Both are successful running
+          # states, so do not require the legacy bare "running" spelling.
+          curl -fsS http://127.0.0.1:7777/state | grep -q '"state":"running' || {
             echo "FAIL: the pushed hook script never reached the hook server"
             curl -fsS http://127.0.0.1:7777/state || true; exit 1; }
           kill "$APP_PID" || true
