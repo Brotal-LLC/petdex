@@ -580,6 +580,87 @@ jobs:
 
           Stop-Process -Id $cold.Id -Force -ErrorAction SilentlyContinue
 
+      - name: Remote agent writeback over real SSH (Linux)
+        # The remote-agents feature's whole promise is that ssh argv built
+        # on the desktop drives a fetch-merge-writeback on a remote. Unit
+        # tests prove the argv and the merge; only a real sshd proves the
+        # round trip. localhost stands in for the remote: the writeback
+        # targets land in this runner's real home, which is exactly what
+        # the assertions below read. The reverse tunnel is NOT asserted —
+        # on localhost the remote 7777 is the port the hook server already
+        # owns, so ExitOnForwardFailure correctly refuses it; the sync
+        # (probe -> fetch -> push -> token) runs before the tunnel starts.
+        if: matrix.platform == 'linux'
+        shell: bash
+        working-directory: packages/petdex-desktop-native
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y openssh-server xvfb
+          sudo mkdir -p /run/sshd
+          sudo /usr/sbin/sshd
+
+          # Dedicated throwaway key, authorized for localhost only for the
+          # duration of this job.
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N '' -f ~/.ssh/ci_petdex -q
+          cat ~/.ssh/ci_petdex.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+
+          # The config the app reads at boot. opencode + codex cover both
+          # writeback shapes: direct-POST plugin and shell-exec hook script.
+          mkdir -p ~/.petdex
+          cat > ~/.petdex/remote-agents.json <<JSON
+          {"remotes":[{"name":"loopback","host":"$USER@localhost",
+            "identity_file":"$HOME/.ssh/ci_petdex",
+            "agents":{"opencode":{"enabled":true},"codex":{"enabled":true}}}]}
+          JSON
+
+          # Any earlier instance booted without this config and would not
+          # re-run the sync.
+          pkill -f petdex-desktop-native || true
+          sleep 2
+          export DISPLAY=:99
+          xdpyinfo -display :99 >/dev/null 2>&1 || { Xvfb :99 -screen 0 1280x800x24 & sleep 3; }
+          PETDEX_PET=ci-pet ./zig-out/bin/petdex-desktop-native > remote.log 2>&1 &
+          APP_PID=$!
+
+          # Poll: probe + fetches + pushes are a dozen sequential ssh round
+          # trips on a loaded runner; a fixed sleep is dead time or a flake.
+          for _ in $(seq 1 45); do
+            [ -f ~/.codex/hooks.json ] && [ -f ~/.petdex/bin/petdex-hook ] && break
+            sleep 2
+          done
+          kill -0 "$APP_PID" || { echo "app died during remote sync"; cat remote.log; exit 1; }
+          echo "=== app log ==="; cat remote.log
+
+          # The pushed opencode plugin is byte-identical to the asset: it
+          # POSTs directly and needs no remote-side helper.
+          grep -q "HOOK_SERVER_URL" ~/.config/opencode/plugins/petdex.js || {
+            echo "FAIL: opencode plugin never landed"; exit 1; }
+          # Codex's merged hooks point at the shared hook path...
+          grep -q "petdex-hook" ~/.codex/hooks.json || {
+            echo "FAIL: codex hooks.json never landed"; cat ~/.codex/hooks.json 2>/dev/null; exit 1; }
+          grep -q "hooks = true" ~/.codex/config.toml || {
+            echo "FAIL: codex config.toml feature flag missing"; exit 1; }
+          # ...and that path carries the sh script, executable, with the
+          # desktop runner's contract markers.
+          test -x ~/.petdex/bin/petdex-hook || {
+            echo "FAIL: remote hook script missing or not executable"; exit 1; }
+          grep -q "hooks-disabled" ~/.petdex/bin/petdex-hook || {
+            echo "FAIL: hook script lacks the killswitch"; exit 1; }
+
+          # Functional proof, not just file presence: invoke the pushed
+          # script the way a remote codex would and assert the desktop's
+          # own hook server answered. The tunnel being absent is fine —
+          # on localhost the script's 127.0.0.1:7777 IS the hook server.
+          TOKEN=$(cat ~/.petdex/runtime/update-token)
+          echo '{"tool_name":"Bash","session_id":"ci"}' | ~/.petdex/bin/petdex-hook bubble pre codex
+          sleep 1
+          curl -fsS http://127.0.0.1:7777/state | grep -q '"state":"running"' || {
+            echo "FAIL: the pushed hook script never reached the hook server"
+            curl -fsS http://127.0.0.1:7777/state || true; exit 1; }
+          kill "$APP_PID" || true
+
       - name: Upload the screenshot
         if: always() && matrix.platform != 'macos'
         uses: actions/upload-artifact@v7

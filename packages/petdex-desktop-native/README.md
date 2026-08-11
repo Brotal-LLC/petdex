@@ -30,3 +30,50 @@ For the pinned desktop build, set `NATIVE_CLI` and `NATIVE_SDK_PATH` to the
 CLI and SDK checkout used by the matching release workflow. The build scripts
 apply the Petdex-owned macOS Mach-O headerpad patch before compiling; they
 fail if the SDK source no longer matches the pinned patch.
+
+## Remote agents (SSH)
+
+Agents running on other machines can drive the same pet. Declare remotes in
+`~/.petdex/remote-agents.json`:
+
+```json
+{
+  "remotes": [
+    {
+      "name": "rogue",
+      "host": "shakib@rogue.lan",
+      "port": 22,
+      "identity_file": "~/.ssh/id_ed25519",
+      "enabled": true,
+      "agents": {
+        "opencode": { "enabled": true },
+        "codex": { "enabled": false },
+        "hermes": { "enabled": true }
+      }
+    }
+  ]
+}
+```
+
+At launch the desktop probes each enabled remote (`ssh` with `BatchMode=yes`,
+no password prompts ever), then runs a fetch-merge-writeback: the remote's
+existing hook configs are read, merged locally by the exact installers a local
+connect uses, and written back — foreign hooks are preserved, never clobbered.
+It then pushes the hook-server update token and holds a reverse tunnel
+(`ssh -N -R 127.0.0.1:7777:127.0.0.1:7777`, supervised with backoff) so hook
+POSTs from the remote reach the desktop's loopback hook server.
+
+Remote shell-exec agents (codex, hermes) invoke `~/.petdex/bin/petdex-hook` on
+the remote, where a small POSIX sh + curl script (`src/assets/petdex-remote-hook.sh`)
+mirrors the desktop hook runner's contract: stdin drain, killswitch
+(`~/.petdex/runtime/hooks-disabled`), token-gated POSTs to `127.0.0.1:7777`,
+never fails outward. The opencode plugin POSTs directly and works unchanged.
+
+Notes:
+- SSH only; there is no API fallback transport. Windows remotes are out of scope.
+- Names are `[a-zA-Z0-9_-]{1,32}`; they appear in logs and temp paths.
+- Sync runs at launch (one writeback pass per remote per run); the Settings
+  "Remote Agents" section reports live status and stays read-only.
+- If a remote account also runs a petdex desktop, do not point a remote at it:
+  the writeback replaces that account's `~/.petdex/bin/petdex-hook` with the
+  sh script.

@@ -22,6 +22,10 @@ const hook_runner = @import("hook_runner.zig");
 const agent_hooks = @import("agent_hooks.zig");
 const plat = @import("plat.zig");
 const installer = @import("installer.zig");
+const remote_agents = @import("remote_agents.zig");
+const remote_ssh = @import("remote_ssh.zig");
+const remote_writeback = @import("remote_writeback.zig");
+const remote_runtime = @import("remote_runtime.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
@@ -114,9 +118,11 @@ pub const Msg = union(enum) {
     native_drag_started: ?State,
     native_drag_ended,
     native_drag_watchdog: native_sdk.EffectTimer,
+    remote_done: native_sdk.EffectExit,
+    remote_backoff: native_sdk.EffectTimer,
     noop,
 
-    pub const view_unbound = .{ "frame_tick", "poll_tick", "physics_tick", "frame_clock", "cycle_state", "native_drag_watchdog", "chime_done", "quit_app", "toggle_focus_mode", "shuffle_pet" };
+    pub const view_unbound = .{ "frame_tick", "poll_tick", "physics_tick", "frame_clock", "cycle_state", "native_drag_watchdog", "chime_done", "quit_app", "toggle_focus_mode", "shuffle_pet", "remote_done", "remote_backoff" };
 };
 
 pub const Model = struct {
@@ -279,6 +285,8 @@ pub const Model = struct {
     pet_filter_len: usize = 0,
     pets_expanded: bool = false,
     install: InstallState = .{},
+    remotes: [remote_runtime.max_remotes]remote_runtime.Slot = .{ .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{} },
+    remote_count: usize = 0,
     dark: bool = true,
     high_contrast: bool = false,
     reduce_motion: bool = false,
@@ -1538,6 +1546,69 @@ fn applyState(model: *Model, state: State, duration_ms: u32, fx: *Effects) void 
     armFrameTimer(model, fx);
 }
 
+/// Turn a remote runtime Action into an effect. Spawn argv comes from
+/// the remote_ssh builders; the driver decides WHAT, this decides HOW
+/// it reaches fx.
+fn runRemoteAction(model: *Model, slot_idx: usize, action: remote_runtime.Action, fx: *Effects) void {
+    switch (action) {
+        .none => {},
+        .backoff => |ms| {
+            fx.startTimer(.{
+                .key = remote_runtime.backoffKey(slot_idx),
+                .interval_ms = ms,
+                .mode = .one_shot,
+                .on_fire = Effects.timerMsg(.remote_backoff),
+            });
+        },
+        .spawn => |spec| {
+            const slot = &model.remotes[slot_idx];
+            const remote = remote_runtime.remoteFor(slot);
+            var argv_buf: [remote_ssh.max_argv][]const u8 = undefined;
+            var scratch: remote_ssh.Scratch = .{};
+            const argv: ?[]const []const u8 = switch (spec.op) {
+                .probe => remote_ssh.probeArgv(&argv_buf, &scratch, &remote),
+                .fetch => blk: {
+                    var path_buf: [512]u8 = undefined;
+                    const path = std.fmt.bufPrint(&path_buf, "~/{s}", .{spec.path}) catch break :blk null;
+                    break :blk remote_ssh.readArgv(&argv_buf, &scratch, &remote, path);
+                },
+                .push => remote_ssh.writeArgv(&argv_buf, &scratch, &remote, spec.path, spec.first_chunk, spec.executable),
+                .token => remote_ssh.tokenArgv(&argv_buf, &scratch, &remote),
+                .tunnel => remote_ssh.tunnelArgv(&argv_buf, &scratch, &remote),
+                .none => null,
+            };
+            const final_argv = argv orelse {
+                std.debug.print("petdex: remote '{s}': could not build ssh argv\n", .{slot.nameSlice()});
+                return;
+            };
+            const is_tunnel = spec.op == .tunnel;
+            fx.spawn(.{
+                .key = remote_runtime.keyFor(slot_idx, spec.op),
+                .argv = final_argv,
+                .stdin = if (spec.stdin.len > 0) spec.stdin else null,
+                .output = if (is_tunnel) .lines else .collect,
+                .on_exit = Effects.exitMsg(.remote_done),
+            });
+        },
+    }
+}
+
+/// Boot entry: load remote-agents.json, fill slots, and kick each
+/// remote's probe. A missing or unparsable config is a no-op — local
+/// pets never depend on remotes.
+fn startRemotes(model: *Model, fx: *Effects) void {
+    const home = env_home orelse return;
+    if (remote_ssh.detect() == null) return;
+    const cfg = remote_agents.load(boot_allocator, home) orelse {
+        std.debug.print("petdex: ~/.petdex/remote-agents.json is not valid JSON; remotes disabled\n", .{});
+        return;
+    };
+    model.remote_count = remote_runtime.fillFromConfig(&model.remotes, &cfg);
+    for (0..model.remote_count) |i| {
+        runRemoteAction(model, i, remote_runtime.startAction(&model.remotes[i]), fx);
+    }
+}
+
 pub fn boot(model: *Model, fx: *Effects) void {
     if (env_home) |home| {
         // Upgrade old CLI-written hooks before any agent starts another
@@ -1550,6 +1621,7 @@ pub fn boot(model: *Model, fx: *Effects) void {
         hook_server.start(boot_allocator, home) catch |err| {
             std.debug.print("petdex: hook server failed to start ({s})\n", .{@errorName(err)});
         };
+        startRemotes(model, fx);
     }
     fx.startTimer(.{
         .key = poll_timer_key,
@@ -1867,6 +1939,24 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (model.waiting_sound) playWaitingChime(fx);
         },
         .chime_done => {},
+        .remote_done => |exit| {
+            const decoded = remote_runtime.slotOpFromKey(exit.key) orelse return;
+            if (decoded.slot >= model.remote_count) return;
+            const home = env_home orelse return;
+            const slot = &model.remotes[decoded.slot];
+            if (exit.reason == .cancelled) return;
+            if (exit.reason == .rejected) return;
+            const action = remote_runtime.onSpawnExit(slot, decoded.slot, decoded.op, exit.code, exit.output, home);
+            runRemoteAction(model, decoded.slot, action, fx);
+        },
+        .remote_backoff => |timer| {
+            if (timer.outcome != .fired) return;
+            const slot_idx = remote_runtime.slotFromBackoffKey(timer.key) orelse return;
+            if (slot_idx >= model.remote_count) return;
+            const home = env_home orelse return;
+            const action = remote_runtime.onBackoff(&model.remotes[slot_idx], slot_idx, home);
+            runRemoteAction(model, slot_idx, action, fx);
+        },
         .set_bubble_text_size => |fraction| {
             model.bubble_text_px = bubble_text_min_px + fraction * (bubble_text_max_px - bubble_text_min_px);
             _ = fitWindow(model, fx);
@@ -3917,6 +4007,10 @@ test {
     _ = hook_server;
     _ = installer;
     _ = plat;
+    _ = remote_agents;
+    _ = remote_runtime;
+    _ = remote_ssh;
+    _ = remote_writeback;
     _ = settings_view;
 }
 
