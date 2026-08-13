@@ -670,7 +670,7 @@ jobs:
             echo "FAIL: codex config.toml feature flag missing"; exit 1; }
           "${REMOTE[@]}" 'grep -q "petdex-hook" ~/.hermes-ci/config.yaml' || {
             echo "FAIL: custom-home Hermes config never landed"; exit 1; }
-          "${REMOTE[@]}" 'grep -qx "~/.hermes-ci" ~/.petdex/runtime/hermes-home' || {
+          "${REMOTE[@]}" 'grep -qx "$HOME/.hermes-ci" ~/.petdex/runtime/hermes-home' || {
             echo "FAIL: custom Hermes home was not published to the hook runtime"; exit 1; }
           # ...and that path carries the sh script, executable, with the
           # desktop runner's contract markers.
