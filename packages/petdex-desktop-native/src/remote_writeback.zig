@@ -296,6 +296,7 @@ test "Hermes watcher reconciles only current metadata" {
 
 test "remote hook preserves Codex conversation metadata and rich updates" {
     try t.expect(std.mem.indexOf(u8, hook_script, "text_field prompt 60") != null);
+    try t.expectEqual(@as(usize, 2), std.mem.count(u8, hook_script, "ord(ch) < 32 or ord(ch) == 127"));
     try t.expect(std.mem.indexOf(u8, hook_script, "$session_id.title") != null);
     try t.expect(std.mem.indexOf(u8, hook_script, "last_assistant_message 960") != null);
     try t.expect(std.mem.indexOf(u8, hook_script, "pre|post)") != null);

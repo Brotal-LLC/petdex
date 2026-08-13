@@ -74,7 +74,8 @@ except Exception:
     root = {}
     print("__parse_error__\t1")
 for key in keys:
-    value = " ".join(find(root, key).split()).replace("\\", " ").replace(chr(34), " ")
+    value = "".join(" " if ord(ch) < 32 or ord(ch) == 127 else ch for ch in find(root, key))
+    value = " ".join(value.split()).replace("\\", " ").replace(chr(34), " ")
     print(key + "\t" + value[:960])
 ' 2>/dev/null)
     if ! printf '%s\n' "$field_cache" | grep -q '^__parse_error__'; then
@@ -253,7 +254,8 @@ try:
 except Exception:
     pass
 def clean(value, limit):
-    return " ".join(str(value or "").split()).replace("\\", " ").replace(chr(34), " ")[:limit]
+    value = "".join(" " if ord(ch) < 32 or ord(ch) == 127 else ch for ch in str(value or ""))
+    return " ".join(value.split()).replace("\\", " ").replace(chr(34), " ")[:limit]
 def canonical(value):
     value = " ".join(str(value or "").split())
     if value and len(value) <= 64 and all(ch.isascii() and (ch.isalnum() or ch in "-_") for ch in value):
