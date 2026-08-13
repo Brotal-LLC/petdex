@@ -1592,18 +1592,16 @@ fn restoreHermesFiles(snapshots: []const HermesFileSnapshot) void {
     }
 }
 
-pub fn installHermes(allocator: std.mem.Allocator, home: []const u8) bool {
+fn installHermesInDir(allocator: std.mem.Allocator, dir: []const u8) bool {
     if (builtin.os.tag == .windows) return false;
-    var dir_buf: [512]u8 = undefined;
-    const dir = hermesHome(&dir_buf, home) orelse return false;
     var path_buf: [512]u8 = undefined;
-    const config_path = hermesConfigPath(&path_buf, home) orelse return false;
+    const config_path = std.fmt.bufPrint(&path_buf, "{s}/config.yaml", .{dir}) catch return false;
     var allow_buf: [512]u8 = undefined;
-    const allow_path = hermesAllowlistPath(&allow_buf, home) orelse return false;
+    const allow_path = std.fmt.bufPrint(&allow_buf, "{s}/shell-hooks-allowlist.json", .{dir}) catch return false;
     var manifest_buf: [512]u8 = undefined;
-    const manifest_path = hermesDesktopPluginPath(&manifest_buf, home, "plugin.yaml") orelse return false;
+    const manifest_path = std.fmt.bufPrint(&manifest_buf, "{s}/plugins/{s}/plugin.yaml", .{ dir, hermes_desktop_plugin_name }) catch return false;
     var init_buf: [512]u8 = undefined;
-    const init_path = hermesDesktopPluginPath(&init_buf, home, "__init__.py") orelse return false;
+    const init_path = std.fmt.bufPrint(&init_buf, "{s}/plugins/{s}/__init__.py", .{ dir, hermes_desktop_plugin_name }) catch return false;
     var plugin_dir_buf: [512]u8 = undefined;
     const slash = std.mem.lastIndexOfScalar(u8, manifest_path, '/') orelse return false;
     const plugin_dir = std.fmt.bufPrint(&plugin_dir_buf, "{s}", .{manifest_path[0..slash]}) catch return false;
@@ -1639,6 +1637,19 @@ pub fn installHermes(allocator: std.mem.Allocator, home: []const u8) bool {
         return false;
     }
     return true;
+}
+
+pub fn installHermes(allocator: std.mem.Allocator, home: []const u8) bool {
+    var dir_buf: [512]u8 = undefined;
+    const dir = hermesHome(&dir_buf, home) orelse return false;
+    return installHermesInDir(allocator, dir);
+}
+
+/// Install into an explicit Hermes data directory without consulting the
+/// process-global HERMES_HOME snapshot. Remote writeback uses this entry point
+/// so its isolated fake home can never mutate the desktop user's live config.
+pub fn installHermesAt(allocator: std.mem.Allocator, hermes_dir: []const u8) bool {
+    return installHermesInDir(allocator, hermes_dir);
 }
 
 fn uninstallHermes(allocator: std.mem.Allocator, home: []const u8) bool {

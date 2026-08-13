@@ -10,33 +10,85 @@
 # outward — an agent's hook chain must not break because a mascot is
 # unreachable.
 
-# Drain stdin first, always: the agent may still be writing after the
-# useful prefix, and closing the pipe early propagates EPIPE to it.
-payload=$(cat 2>/dev/null)
-
 runtime="$HOME/.petdex/runtime"
 
-# Killswitch, same file the desktop honors.
-[ -f "$runtime/hooks-disabled" ] && exit 0
+# Keep a bounded useful prefix while draining the complete hook pipe. Tool
+# results can be many megabytes; retaining all of them delays the agent and
+# used to reparse the same payload once per extracted field.
+if command -v python3 >/dev/null 2>&1; then
+    payload=$(python3 -c 'import sys
+data = sys.stdin.buffer.read(65536)
+while sys.stdin.buffer.read(65536):
+    pass
+sys.stdout.buffer.write(data)' 2>/dev/null)
+else
+    payload=$({ dd bs=65536 count=1 2>/dev/null; cat >/dev/null 2>&1; })
+fi
 
-# No curl, no token, no work. Both are expected states (fresh remote,
-# tunnel not yet pushed the token), not errors.
+# Check the gate before doing any parsing. Draining remains unconditional so
+# the hook host never sees EPIPE, but a disconnected Petdex costs no decoder.
+[ -f "$runtime/hooks-disabled" ] && exit 0
 command -v curl >/dev/null 2>&1 || exit 0
 [ -f "$runtime/update-token" ] || exit 0
 token=$(tr -d ' \t\r\n' < "$runtime/update-token")
 [ -n "$token" ] || exit 0
-
-# Hook configs are shared by local and remote agents, so this script
-# accepts the same leading `bubble` operation as the desktop binary.
-# Unknown operations are harmless no-ops, matching the hook's general
-# never-fail-outward contract.
 [ "${1:-}" = "bubble" ] || exit 0
 phase=${2:-}
 agent=$(printf '%s' "${3:-}" | tr -cd 'A-Za-z0-9._-')
 
+# Decode JSON once. Values are flattened to a tiny tab-separated cache after
+# removing line breaks, quotes and backslashes; later shell lookups never
+# invoke another JSON parser.
+field_cache_ready=false
+field_cache=
+if command -v python3 >/dev/null 2>&1; then
+    field_cache=$(printf '%s' "$payload" | python3 -c '
+import json, sys
+keys = (
+    "session_id", "sessionId", "sessionID", "session_key", "thread_id", "conversation_id",
+    "petdex_conversation_key", "parent_session_id", "petdex_parent_session_id", "child_session_id",
+    "petdex_session_kind", "petdex_subagent_label", "child_role", "prompt", "user_message", "userPrompt",
+    "petdex_session_title", "notification_type", "notification_kind", "tool_name", "question", "description",
+    "command", "file_path", "path", "pattern", "query", "last_assistant_message", "assistant_response",
+    "message", "child_summary", "cwd", "turn_id", "message_id", "event_id", "call_id", "request_id",
+    "tool_use_id",
+)
+def find(value, key):
+    if isinstance(value, dict):
+        found = value.get(key)
+        if isinstance(found, (str, int, float)):
+            return str(found)
+        for child in value.values():
+            result = find(child, key)
+            if result:
+                return result
+    elif isinstance(value, list):
+        for child in value:
+            result = find(child, key)
+            if result:
+                return result
+    return ""
+try:
+    root = json.load(sys.stdin)
+except Exception:
+    root = {}
+    print("__parse_error__\t1")
+for key in keys:
+    value = " ".join(find(root, key).split()).replace("\\", " ").replace(chr(34), " ")
+    print(key + "\t" + value[:960])
+' 2>/dev/null)
+    if ! printf '%s\n' "$field_cache" | grep -q '^__parse_error__'; then
+        field_cache_ready=true
+    fi
+fi
+
 # Extract an identifier from the payload without jq. Identifiers are
 # deliberately restricted because they are interpolated into JSON below.
 id_field() {
+    if $field_cache_ready; then
+        printf '%s\n' "$field_cache" | awk -F '\t' -v wanted="$1" '$1 == wanted { sub(/^[^\t]*\t/, ""); print; exit }' | cut -c 1-256 | tr -cd 'A-Za-z0-9._-'
+        return
+    fi
     printf '%s' "$payload" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 | tr -cd 'A-Za-z0-9._-'
 }
 
@@ -48,34 +100,8 @@ id_field() {
 text_field() {
     key=$1
     limit=${2:-96}
-    if command -v python3 >/dev/null 2>&1; then
-        printf '%s' "$payload" | python3 -c '
-import json, sys
-
-def find(value, key):
-    if isinstance(value, dict):
-        found = value.get(key)
-        if isinstance(found, str):
-            return found
-        for child in value.values():
-            found = find(child, key)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = find(child, key)
-            if found:
-                return found
-    return ""
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    data = {}
-value = " ".join(find(data, sys.argv[1]).split())
-value = value.replace("\\", " ").replace("\"", " ")
-sys.stdout.write(value[:int(sys.argv[2])])
-' "$key" "$limit" 2>/dev/null
+    if $field_cache_ready; then
+        printf '%s\n' "$field_cache" | awk -F '\t' -v wanted="$key" '$1 == wanted { sub(/^[^\t]*\t/, ""); print; exit }' | cut -c "1-$limit"
         return
     fi
     printf '%s' "$payload" \
@@ -89,13 +115,17 @@ sys.stdout.write(value[:int(sys.argv[2])])
 session_id=$(id_field session_id)
 [ -n "$session_id" ] || session_id=$(id_field sessionId)
 [ -n "$session_id" ] || session_id=$(id_field sessionID)
+[ -n "$session_id" ] || session_id=$(id_field session_key)
 [ -n "$session_id" ] || session_id=$(id_field thread_id)
 [ -n "$session_id" ] || session_id=$(id_field conversation_id)
+canonical_hint=$(text_field petdex_conversation_key 960)
+[ -n "$canonical_hint" ] || canonical_hint=$(text_field session_key 960)
 # Hermes emits subagent lifecycle hooks on the parent stream and stores the
 # worker id in child_session_id. Keep the parent as a canonical fallback, but
 # make the child the raw session so its summary nests instead of overwriting
 # the parent card.
-parent_session_hint=$(id_field parent_session_id)
+parent_session_hint=$(id_field petdex_parent_session_id)
+[ -n "$parent_session_hint" ] || parent_session_hint=$(id_field parent_session_id)
 [ -n "$parent_session_hint" ] || parent_session_hint=$session_id
 child_session_id=$(id_field child_session_id)
 subagent_lifecycle=false
@@ -108,6 +138,9 @@ case "$phase" in
         ;;
 esac
 child_role=$(text_field child_role 48)
+[ -n "$child_role" ] || child_role=$(text_field petdex_subagent_label 48)
+session_kind_hint=$(id_field petdex_session_kind)
+case "$session_kind_hint" in primary|subagent) ;; *) session_kind_hint= ;; esac
 sessions="$runtime/sessions"
 
 # Read the title owned by each agent's server/session store. This runs on every
@@ -116,17 +149,16 @@ sessions="$runtime/sessions"
 provider_context() {
     command -v python3 >/dev/null 2>&1 || return
     python3 -c '
-import json, os, sqlite3, sys
+import hashlib, json, os, re, sqlite3, sys
 from pathlib import Path
 
 agent, sid, force_parent, force_subagent, explicit_label = sys.argv[1:6]
 title = ""
 conversation = sid
 parent = ""
-# Hermes child hooks can beat state.db persistence. Unknown Hermes context is
-# suppressed until a later event proves it is primary; this intentionally
-# favors one missed startup update over a standalone subagent ghost card.
-kind = "subagent" if agent == "hermes" else "primary"
+# Missing or temporarily locked state must not suppress a real top-level
+# session. Only explicit child lifecycle evidence defaults to subagent.
+kind = "subagent" if force_subagent == "true" else "primary"
 label = ""
 subagent_sources = {
     "subagent", "sub_agent", "child", "worker", "delegate", "delegated",
@@ -154,7 +186,18 @@ try:
                 title = str(row.get("thread_name") or "")
                 break
     elif agent == "hermes":
-        root = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+        configured_home = ""
+        try:
+            configured_home = (Path.home() / ".petdex" / "runtime" / "hermes-home").read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+        root = Path(os.environ.get("HERMES_HOME") or configured_home or (Path.home() / ".hermes")).expanduser()
+        try:
+            profile = (root / "active_profile").read_text(encoding="utf-8").strip()
+        except OSError:
+            profile = ""
+        if profile and profile != "default" and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", profile):
+            root = root / "profiles" / profile
         db_path = root / "state.db"
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.05) as db:
             columns = {str(row[1]) for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
@@ -211,7 +254,13 @@ except Exception:
     pass
 def clean(value, limit):
     return " ".join(str(value or "").split()).replace("\\", " ").replace(chr(34), " ")[:limit]
-for value, limit in ((title, 256), (conversation, 96), (parent, 96), (kind, 16), (label, 48)):
+def canonical(value):
+    value = " ".join(str(value or "").split())
+    if value and len(value) <= 64 and all(ch.isascii() and (ch.isalnum() or ch in "-_") for ch in value):
+        return value
+    return hashlib.sha256(value.encode("utf-8")).hexdigest() if value else ""
+conversation = canonical(conversation)
+for value, limit in ((title, 256), (conversation, 64), (parent, 96), (kind, 16), (label, 48)):
     print(clean(value, limit))
 ' "$agent" "$session_id" "$parent_session_hint" "$subagent_lifecycle" "$child_role" 2>/dev/null
 }
@@ -244,6 +293,8 @@ session_kind=$(printf '%s\n' "$context" | sed -n '4p')
 subagent_label=$(printf '%s\n' "$context" | sed -n '5p')
 [ -n "$conversation_key" ] || conversation_key=$session_id
 [ -n "$session_kind" ] || session_kind=primary
+[ -n "$canonical_hint" ] && conversation_key=$canonical_hint
+[ -n "$session_kind_hint" ] && session_kind=$session_kind_hint
 if [ "$subagent_lifecycle" = true ]; then
     # A just-spawned worker can race state.db creation. Its known parent still
     # gives us the correct aggregate identity until the durable marker lands.
@@ -252,6 +303,28 @@ if [ "$subagent_lifecycle" = true ]; then
     session_kind=subagent
     [ -n "$subagent_label" ] || subagent_label=$child_role
 fi
+
+normalize_key() {
+    value=$1
+    [ -n "$value" ] || return
+    case "$value" in
+        *[!A-Za-z0-9_-]*) ;;
+        *)
+            [ "${#value}" -le 64 ] && { printf '%s' "$value"; return; }
+            ;;
+    esac
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$value" | sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$value" | shasum -a 256 | awk '{print $1}'
+    elif command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$value" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+    else
+        set -- $(printf '%s' "$value" | cksum)
+        printf 'cksum-%s-%s' "$1" "$2"
+    fi
+}
+conversation_key=$(normalize_key "$conversation_key")
 
 # This PR targets the base card model, which has no nested child hierarchy.
 # Suppress every confidently classified Hermes worker at the source instead
@@ -470,7 +543,7 @@ fi
 
 if [ -n "$text" ] && $post_bubble; then
     metadata=',"remote":true'
-    [ -n "$session_id" ] && metadata="$metadata,\"session_id\":\"$session_id\""
+    [ -n "$conversation_key" ] && metadata="$metadata,\"session_id\":\"$conversation_key\""
     [ -n "$session_id" ] && metadata="$metadata,\"source_session_id\":\"$session_id\""
     [ -n "$conversation_key" ] && metadata="$metadata,\"conversation_key\":\"$conversation_key\""
     [ -n "$parent_session_id" ] && metadata="$metadata,\"parent_session_id\":\"$parent_session_id\""

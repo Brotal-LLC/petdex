@@ -21,11 +21,36 @@ const plat = @import("plat.zig");
 
 const AgentKind = agent_hooks.AgentKind;
 
+pub const max_name_bytes: usize = 32;
+pub const max_host_bytes: usize = 255;
+// remote_ssh prefixes identity paths with "-i" in a 384-byte argv scratch
+// buffer, so the configured value must leave room for those two bytes.
+pub const max_identity_bytes: usize = 382;
+pub const max_agent_home_bytes: usize = 320;
+// Native effects retain at most 2048 bytes of argv. The longest SSH command
+// has about 1.27 KiB of fixed supervision logic, so keep a safety margin for
+// the three config-controlled fields it carries.
+pub const max_transport_variable_bytes: usize = 680;
+pub const default_hermes_home = "~/.hermes";
+
+fn shellExpansionBytes(value: []const u8) usize {
+    var extra: usize = 0;
+    for (value) |c| {
+        // remote_ssh.shQuote expands one apostrophe to the four-byte '\''
+        // sequence, three bytes more than the source character.
+        if (c == '\'') extra += 3;
+    }
+    return value.len + extra;
+}
+
 /// Per-agent options for one remote. Today there is exactly one
 /// option; the struct exists so each agent can grow its own knobs
 /// (custom config dir, extra env) without a schema break.
 pub const AgentOptions = struct {
     enabled: bool = false,
+    /// Optional remote config root. Hermes uses this as its remote
+    /// HERMES_HOME; other agents reserve it for future parity.
+    home: ?[]const u8 = null,
 };
 
 /// The remote-capable agent set, as a struct so JSON field names pin
@@ -109,19 +134,39 @@ pub fn configPath(buf: []u8, home: []const u8) ?[]const u8 {
 /// the tunnel supervisor before trusting a loaded config.
 pub fn validateRemote(remote: *const Remote) ?[]const u8 {
     if (remote.name.len == 0) return "remote needs a name";
-    if (remote.name.len > 32) return "remote name is too long (max 32)";
+    if (remote.name.len > max_name_bytes) return "remote name is too long (max 32)";
     for (remote.name) |c| {
         const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or c == '_' or c == '-';
         if (!ok) return "remote name: letters, digits, '_' and '-' only";
     }
     if (remote.host.len == 0) return "remote needs a host (user@host or host)";
+    if (remote.host.len > max_host_bytes) return "remote host is too long (max 255 bytes)";
     for (remote.host) |c| {
         if (c <= ' ' or c == 0x7f) return "host must not contain whitespace or control characters";
     }
     if (remote.port == 0) return "port must be 1-65535";
     if (remote.identity_file) |p| {
         if (p.len == 0) return "identity file path is empty";
+        if (p.len > max_identity_bytes) return "identity file path is too long (max 382 bytes)";
+        for (p) |c| {
+            if (c < ' ' or c == 0x7f) return "identity file path must not contain control characters";
+        }
+    }
+    if (remote.agents.hermes.home) |p| {
+        if (p.len == 0) return "Hermes home path is empty";
+        if (p.len > max_agent_home_bytes) return "Hermes home path is too long (max 320 bytes)";
+        if (!std.mem.startsWith(u8, p, "~/") and !std.fs.path.isAbsolute(p)) {
+            return "Hermes home must be absolute or start with ~/";
+        }
+        for (p) |c| {
+            if (c < ' ' or c == 0x7f) return "Hermes home must not contain control characters";
+        }
+    }
+    const identity_len = if (remote.identity_file) |p| p.len else 0;
+    const hermes_home_len = shellExpansionBytes(remote.agents.hermes.home orelse default_hermes_home);
+    if (remote.host.len + identity_len + hermes_home_len > max_transport_variable_bytes) {
+        return "host, identity, and Hermes home are too long in combination";
     }
     if (remote.enabled and !remote.agents.anyEnabled()) return "enable at least one agent, or disable the remote";
     return null;
@@ -184,7 +229,7 @@ test "save/load round trip preserves remotes and per-agent options" {
         .identity_file = "~/.ssh/id_ed25519",
         .agents = .{
             .opencode = .{ .enabled = true },
-            .hermes = .{ .enabled = true },
+            .hermes = .{ .enabled = true, .home = "/srv/hermes" },
         },
     };
     remotes.append(r) catch unreachable;
@@ -205,6 +250,7 @@ test "save/load round trip preserves remotes and per-agent options" {
     try t.expect(rogue.agents.opencode.enabled);
     try t.expect(!rogue.agents.codex.enabled);
     try t.expect(rogue.agents.hermes.enabled);
+    try t.expectEqualStrings("/srv/hermes", rogue.agents.hermes.home.?);
     try t.expect(!loaded.remotes[1].enabled);
     try t.expect(loaded.remotes[1].identity_file == null);
 }
@@ -260,6 +306,36 @@ test "validateRemote rejects the shapes that would break ssh argv or logs" {
     r.port = 0;
     try t.expect(validateRemote(&r) != null);
     r.port = 22;
+    var long_host: [max_host_bytes + 1]u8 = @splat('h');
+    r.host = &long_host;
+    try t.expect(validateRemote(&r) != null);
+    r.host = "user@host";
+    var long_identity: [max_identity_bytes + 1]u8 = @splat('i');
+    r.identity_file = &long_identity;
+    try t.expect(validateRemote(&r) != null);
+    r.identity_file = null;
+    r.identity_file = "bad\nidentity";
+    try t.expect(validateRemote(&r) != null);
+    r.identity_file = null;
+    r.agents.hermes.home = "relative/hermes";
+    try t.expect(validateRemote(&r) != null);
+    r.agents.hermes.home = "/srv/hermes data";
+    try t.expect(validateRemote(&r) == null);
+    var transport_host: [max_host_bytes]u8 = @splat('h');
+    var transport_identity: [max_identity_bytes]u8 = @splat('i');
+    r.host = &transport_host;
+    r.identity_file = &transport_identity;
+    var transport_home: [max_transport_variable_bytes - max_host_bytes - max_identity_bytes + 1]u8 = @splat('h');
+    transport_home[0] = '/';
+    r.agents.hermes.home = &transport_home;
+    try t.expect(validateRemote(&r) != null);
+    r.host = "host";
+    r.identity_file = null;
+    var quote_heavy_home: [max_agent_home_bytes]u8 = @splat('\'');
+    quote_heavy_home[0] = '/';
+    r.agents.hermes.home = &quote_heavy_home;
+    try t.expect(validateRemote(&r) != null);
+    r.agents.hermes.home = null;
     // An enabled remote with no agents would spin a tunnel for nothing.
     r.agents = .{};
     try t.expect(validateRemote(&r) != null);

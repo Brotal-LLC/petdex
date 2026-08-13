@@ -156,6 +156,16 @@ jobs:
         run: |
           "$NATIVE_CLI" test .
 
+      - name: Test remote helper runtimes
+        if: matrix.platform != 'windows'
+        working-directory: packages/petdex-desktop-native
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/remote_watchers_test.py
+          sh -n src/assets/petdex-remote-hook.sh
+          sh tests/remote_hook_test.sh
+
       # Compiling proves nothing about whether the app draws: the hook
       # server regression that shipped in this branch compiled fine on
       # every platform. These steps run the binary, exercise the hook
@@ -594,6 +604,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get install -y xvfb
+          cleanup_remote_smoke() {
+            if [ -n "${APP_PID:-}" ]; then kill "$APP_PID" 2>/dev/null || true; fi
+            docker rm -f petdex-ssh >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote_smoke EXIT
 
           # Dedicated throwaway SSH host and key. Container loopback keeps
           # the remote forward distinct from the app's runner-side :7777.
@@ -601,7 +616,7 @@ jobs:
           ssh-keygen -t ed25519 -N '' -f ~/.ssh/ci_petdex -q
           docker run -d --name petdex-ssh -p 127.0.0.1:22222:22 ubuntu:24.04 sleep infinity
           docker exec petdex-ssh bash -lc \
-            'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server curl python3 && useradd -m -s /bin/bash petdex && mkdir -p /run/sshd /home/petdex/.ssh'
+            'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server curl python3 procps && useradd -m -s /bin/bash petdex && mkdir -p /run/sshd /home/petdex/.ssh'
           docker cp ~/.ssh/ci_petdex.pub petdex-ssh:/tmp/ci_petdex.pub
           docker exec petdex-ssh bash -lc \
             'cat /tmp/ci_petdex.pub > /home/petdex/.ssh/authorized_keys && chown -R petdex:petdex /home/petdex/.ssh && chmod 700 /home/petdex/.ssh && chmod 600 /home/petdex/.ssh/authorized_keys && ssh-keygen -A'
@@ -616,12 +631,14 @@ jobs:
           "${REMOTE[@]}" true
 
           # The config the app reads at boot. opencode + codex cover both
-          # writeback shapes: direct-POST plugin and shell-exec hook script.
+          # writeback shapes; Hermes also exercises a custom remote home and
+          # the two-watcher readiness handshake.
           mkdir -p ~/.petdex
           cat > ~/.petdex/remote-agents.json <<JSON
           {"remotes":[{"name":"loopback","host":"petdex@localhost","port":22222,
             "identity_file":"$HOME/.ssh/ci_petdex",
-            "agents":{"opencode":{"enabled":true},"codex":{"enabled":true}}}]}
+            "agents":{"opencode":{"enabled":true},"codex":{"enabled":true},
+              "hermes":{"enabled":true,"home":"~/.hermes-ci"}}}]}
           JSON
 
           # Any earlier instance booted without this config and would not
@@ -651,12 +668,18 @@ jobs:
             echo "FAIL: codex hooks.json never landed"; "${REMOTE[@]}" 'cat ~/.codex/hooks.json' || true; exit 1; }
           "${REMOTE[@]}" 'grep -q "hooks = true" ~/.codex/config.toml' || {
             echo "FAIL: codex config.toml feature flag missing"; exit 1; }
+          "${REMOTE[@]}" 'grep -q "petdex-hook" ~/.hermes-ci/config.yaml' || {
+            echo "FAIL: custom-home Hermes config never landed"; exit 1; }
+          "${REMOTE[@]}" 'grep -qx "~/.hermes-ci" ~/.petdex/runtime/hermes-home' || {
+            echo "FAIL: custom Hermes home was not published to the hook runtime"; exit 1; }
           # ...and that path carries the sh script, executable, with the
           # desktop runner's contract markers.
           "${REMOTE[@]}" 'test -x ~/.petdex/bin/petdex-hook' || {
             echo "FAIL: remote hook script missing or not executable"; exit 1; }
           "${REMOTE[@]}" 'grep -q "hooks-disabled" ~/.petdex/bin/petdex-hook' || {
             echo "FAIL: hook script lacks the killswitch"; exit 1; }
+          "${REMOTE[@]}" 'test -s ~/.petdex/runtime/codex-watch.pid && test -s ~/.petdex/runtime/hermes-watch.pid && test -f ~/.petdex/runtime/tunnel-lease' || {
+            echo "FAIL: watcher readiness was reported without live PID/lease files"; exit 1; }
 
           # Functional proof, not just file presence: invoke the pushed
           # script the way remote Codex would and assert it reached the
@@ -672,6 +695,18 @@ jobs:
             echo "FAIL: the pushed hook script never reached the hook server"
             curl -fsS http://127.0.0.1:7777/state || true; exit 1; }
           kill "$APP_PID" || true
+          # The tunnel owns the feed lease. Its exit revokes the token and
+          # both detached watchers must clean up without waiting for another
+          # Petdex launch.
+          for _ in $(seq 1 15); do
+            if "${REMOTE[@]}" 'test ! -e ~/.petdex/runtime/update-token && test ! -e ~/.petdex/runtime/codex-watch.pid && test ! -e ~/.petdex/runtime/hermes-watch.pid'; then
+              break
+            fi
+            sleep 1
+          done
+          "${REMOTE[@]}" 'test ! -e ~/.petdex/runtime/update-token && test ! -e ~/.petdex/runtime/codex-watch.pid && test ! -e ~/.petdex/runtime/hermes-watch.pid' || {
+            echo "FAIL: tunnel shutdown left a token or watcher alive"; exit 1; }
+          APP_PID=
 
       - name: Upload the screenshot
         if: always() && matrix.platform != 'macos'

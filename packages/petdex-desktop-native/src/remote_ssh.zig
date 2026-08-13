@@ -16,9 +16,8 @@
 //!     literally named `~`.
 //!
 //! fx.spawn budget (16 argv elements / 2048 argv bytes / 4096 stdin
-//! bytes) shapes the write path: a file that fits stdin goes in one
-//! `cat >` spawn, anything larger is chunked by the caller into one
-//! `cat >` plus `cat >>` appends (see stdin_chunk).
+//! bytes) shapes the write path: chunks accumulate in a private sibling
+//! temporary file and only the final chunk atomically replaces the target.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -30,7 +29,7 @@ const Remote = remote_agents.Remote;
 pub const max_argv = 16;
 
 /// Largest stdin payload one write spawn carries. Under the fx.spawn
-/// 4096 cap with margin; the caller sequences `cat >` then `cat >>`.
+/// 4096 cap with margin; the caller sequences temporary-file writes.
 pub const stdin_chunk = 3072;
 
 /// Remote-side locations, always `~/`-relative so the remote shell
@@ -46,6 +45,9 @@ pub const remote_codex_watcher = "~/.petdex/bin/petdex-codex-watch";
 pub const remote_hermes_watcher = "~/.petdex/bin/petdex-hermes-watch";
 pub const remote_token_file = "~/.petdex/runtime/update-token";
 pub const remote_host_file = "~/.petdex/runtime/remote-host";
+pub const remote_hermes_home_file = "~/.petdex/runtime/hermes-home";
+pub const remote_lease_file = "~/.petdex/runtime/tunnel-lease";
+pub const missing_file_exit_code: i32 = 44;
 pub const remote_opencode_plugin = "~/.config/opencode/plugins/petdex.js";
 pub const remote_codex_hooks = "~/.codex/hooks.json";
 pub const remote_hermes_config = "~/.hermes/config.yaml";
@@ -94,7 +96,7 @@ pub const Scratch = struct {
     quote_c: [512]u8 = undefined,
     quote_d: [512]u8 = undefined,
     quote_e: [512]u8 = undefined,
-    cmd: [1024]u8 = undefined,
+    cmd: [4096]u8 = undefined,
 };
 
 /// Install the small local wrapper that keeps a tunnel bounded by the
@@ -216,7 +218,7 @@ pub fn tunnelArgv(
     buf[destination_idx + 1] = std.fmt.bufPrint(&scratch.reverse, "-R{s}", .{tunnel_spec}) catch return null;
     buf[destination_idx + 2] = separator;
     buf[destination_idx + 3] = destination;
-    buf[destination_idx + 4] = std.fmt.bufPrint(&scratch.cmd, "i=0; while :; do if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 1 http://127.0.0.1:7777/health >/dev/null 2>&1 && break; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:7777/health\",timeout=1).read()' >/dev/null 2>&1 && break; else exit 69; fi; i=$((i+1)); test \"$i\" -ge 20 && exit 75; sleep 1; done; printf '{s}\\n'; while :; do sleep 3600; done", .{tunnel_ready_marker}) catch return null;
+    buf[destination_idx + 4] = std.fmt.bufPrint(&scratch.cmd, "umask 077; runtime=\"$HOME/.petdex/runtime\"; lease=\"$runtime/tunnel-lease\"; token=\"$runtime/update-token\"; mkdir -p \"$runtime\" || exit; rm -f \"$lease\"; trap 'rm -f \"$lease\" \"$token\"' 0 1 2 15; i=0; while :; do if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 1 http://127.0.0.1:7777/health >/dev/null 2>&1 && break; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:7777/health\",timeout=1).read()' >/dev/null 2>&1 && break; else exit 69; fi; i=$((i+1)); test \"$i\" -ge 20 && exit 75; sleep 1; done; : > \"$lease\" || exit; printf '{s}\\n'; while :; do : > \"$lease\" || exit; sleep 2; done", .{tunnel_ready_marker}) catch return null;
 
     const ssh_len = n + 3;
     var i = ssh_len;
@@ -239,11 +241,7 @@ pub fn tunnelArgv(
 pub fn quiesceArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?[]const []const u8 {
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;
-    const runtime = shQuote(&scratch.quote_a, "~/.petdex/runtime") orelse return null;
-    const token = shQuote(&scratch.quote_b, remote_token_file) orelse return null;
-    const codex_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/codex-watch.pid") orelse return null;
-    const hermes_pid = shQuote(&scratch.quote_d, "~/.petdex/runtime/hermes-watch.pid") orelse return null;
-    buf[n] = std.fmt.bufPrint(&scratch.cmd, "umask 077; mkdir -p {s}; rm -f {s}; for p in {s} {s}; do if test -r \"$p\"; then old=$(cat \"$p\"); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; rm -f \"$p\"; done; sleep 2", .{ runtime, token, codex_pid, hermes_pid }) catch return null;
+    buf[n] = "umask 077; runtime=\"$HOME/.petdex/runtime\"; mkdir -p \"$runtime\" || exit; rm -f \"$runtime/update-token\" \"$runtime/tunnel-lease\"; is_owned() { old=$1; needle=$2; case \"$old\" in ''|*[!0-9]*) return 1 ;; esac; command=$(ps -ww -p \"$old\" -o command= 2>/dev/null) || return 1; case \"$command\" in *\"$needle\"*) return 0 ;; *) return 1 ;; esac; }; stop_one() { p=$1; needle=$2; if test -r \"$p\"; then old=$(cat \"$p\"); if is_owned \"$old\" \"$needle\"; then kill \"$old\" 2>/dev/null || true; fi; fi; rm -f \"$p\"; }; stop_one \"$runtime/codex-watch.pid\" \"$HOME/.petdex/bin/petdex-codex-watch\"; stop_one \"$runtime/hermes-watch.pid\" \"$HOME/.petdex/bin/petdex-hermes-watch\"; sleep 2";
     return buf[0 .. n + 1];
 }
 
@@ -254,7 +252,9 @@ pub fn quiesceArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const
 pub fn probeArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote) ?[]const []const u8 {
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;
-    buf[n] = "if test -r \"$HOME/.hermes/active_profile\"; then printf 'petdex-hermes-profile='; head -n 1 \"$HOME/.hermes/active_profile\"; fi; true";
+    const hermes_home = remote.agents.hermes.home orelse remote_agents.default_hermes_home;
+    const quoted = shQuote(&scratch.quote_a, hermes_home) orelse return null;
+    buf[n] = std.fmt.bufPrint(&scratch.cmd, "hermes_home={s}; if test -r \"$hermes_home/active_profile\"; then printf 'petdex-hermes-profile='; head -n 1 \"$hermes_home/active_profile\"; fi; true", .{quoted}) catch return null;
     return buf[0 .. n + 1];
 }
 
@@ -263,38 +263,38 @@ pub fn readArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Re
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;
     const quoted = shQuote(&scratch.quote_a, path) orelse return null;
-    buf[n] = std.fmt.bufPrint(&scratch.cmd, "cat -- {s}", .{quoted}) catch return null;
+    buf[n] = std.fmt.bufPrint(&scratch.cmd, "target={s}; if test ! -e \"$target\" && test ! -L \"$target\"; then exit {d}; fi; cat -- \"$target\"", .{ quoted, missing_file_exit_code }) catch return null;
     return buf[0 .. n + 1];
 }
 
-/// Write spawn: the first chunk mkdirs and truncates, later chunks
-/// append. Bytes ride stdin, never argv, so content cannot be read as
-/// flags and binary bytes survive untouched. Executable files (the
-/// remote hook script) get their chmod folded into the first chunk so
-/// a partial write never leaves an executable-bit-less script that a
-/// merged config already points at... which is still harmless, but
-/// one spawn fewer.
+/// Write one chunk into a private sibling temporary. The last chunk sets the
+/// final mode and atomically renames it over the live path. Existing symlink
+/// targets are resolved first so writeback preserves user-managed relocation.
 pub fn writeArgv(
     buf: *[max_argv][]const u8,
     scratch: *Scratch,
     remote: *const Remote,
     path: []const u8,
     first_chunk: bool,
+    last_chunk: bool,
     executable: bool,
 ) ?[]const []const u8 {
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;
     const quoted = shQuote(&scratch.quote_a, path) orelse return null;
-    if (first_chunk) {
-        const dir = shQuote(&scratch.quote_b, dirname(path)) orelse return null;
-        if (executable) {
-            buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s} && cat > {s} && chmod 755 {s}", .{ dir, quoted, quoted }) catch return null;
-        } else {
-            buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s} && cat > {s}", .{ dir, quoted }) catch return null;
-        }
-    } else {
-        buf[n] = std.fmt.bufPrint(&scratch.cmd, "cat >> {s}", .{quoted}) catch return null;
-    }
+    const remote_name = shQuote(&scratch.quote_b, remote.name) orelse return null;
+    const write = if (first_chunk)
+        "cat > \"$tmp\""
+    else
+        "test -f \"$tmp\" && cat >> \"$tmp\"";
+    const finish = if (last_chunk)
+        (if (executable)
+            "chmod 755 \"$tmp\" && mv -f \"$tmp\" \"$target\""
+        else
+            "chmod 600 \"$tmp\" && mv -f \"$tmp\" \"$target\"")
+    else
+        ":";
+    buf[n] = std.fmt.bufPrint(&scratch.cmd, "umask 077; target={s}; remote_name={s}; if test -L \"$target\"; then link=$(readlink \"$target\") || exit; case \"$link\" in /*) target=$link ;; *) target=$(dirname \"$target\")/$link ;; esac; fi; dir=$(dirname \"$target\") || exit; mkdir -p \"$dir\" || exit; tmp=\"${{target}}.petdex-tmp-${{remote_name}}\"; trap 'rm -f \"$tmp\"; exit 1' 1 2 15; {s} || {{ rm -f \"$tmp\"; exit 1; }}; {s} || {{ rm -f \"$tmp\"; exit 1; }}", .{ quoted, remote_name, write, finish }) catch return null;
     return buf[0 .. n + 1];
 }
 
@@ -307,7 +307,9 @@ pub fn tokenArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const R
     const quoted = shQuote(&scratch.quote_a, remote_token_file) orelse return null;
     const dir = shQuote(&scratch.quote_b, dirname(remote_token_file)) orelse return null;
     const host_file = shQuote(&scratch.quote_c, remote_host_file) orelse return null;
-    buf[n] = std.fmt.bufPrint(&scratch.cmd, "umask 077; mkdir -p {s} || exit; tmp=\"$HOME/.petdex/runtime/update-token.tmp.$$\"; trap 'rm -f \"$tmp\"' 0 1 2 15; cat > \"$tmp\" && chmod 600 \"$tmp\" && hostname > {s} && mv -f \"$tmp\" {s}", .{ dir, host_file, quoted }) catch return null;
+    const hermes_home_file = shQuote(&scratch.quote_d, remote_hermes_home_file) orelse return null;
+    const hermes_home = shQuote(&scratch.quote_e, remote.agents.hermes.home orelse remote_agents.default_hermes_home) orelse return null;
+    buf[n] = std.fmt.bufPrint(&scratch.cmd, "umask 077; mkdir -p {s} || exit; tmp=\"$HOME/.petdex/runtime/update-token.tmp.$$\"; trap 'rm -f \"$tmp\"' 0 1 2 15; hermes_home={s}; cat > \"$tmp\" && chmod 600 \"$tmp\" && hostname > {s} && printf '%s\\n' \"$hermes_home\" > {s} && mv -f \"$tmp\" {s}", .{ dir, hermes_home, host_file, hermes_home_file, quoted }) catch return null;
     return buf[0 .. n + 1];
 }
 
@@ -324,21 +326,22 @@ pub fn watcherArgv(
     if (!start_codex and !start_hermes) return null;
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;
-    const runtime = shQuote(&scratch.quote_a, "~/.petdex/runtime") orelse return null;
+    const hermes_home = shQuote(&scratch.quote_a, remote.agents.hermes.home orelse remote_agents.default_hermes_home) orelse return null;
+    const helper = "umask 077; for x in python3 curl ps; do command -v \"$x\" >/dev/null 2>&1 || exit 69; done; runtime=\"$HOME/.petdex/runtime\"; lease=\"$runtime/tunnel-lease\"; mkdir -p \"$runtime\" || exit; test -f \"$lease\" || exit 75; is_owned() { old=$1; needle=$2; case \"$old\" in ''|*[!0-9]*) return 1 ;; esac; command=$(ps -ww -p \"$old\" -o command= 2>/dev/null) || return 1; case \"$command\" in *\"$needle\"*) return 0 ;; *) return 1 ;; esac; }; start_one() { p=$1; exe=$2; shift 2; if test -r \"$p\"; then old=$(cat \"$p\"); if is_owned \"$old\" \"$exe\"; then kill \"$old\" 2>/dev/null || true; fi; fi; rm -f \"$p\"; nohup \"$exe\" \"$@\" >/dev/null 2>&1 </dev/null & child=$!; i=0; stable=0; while test \"$i\" -lt 30; do if test -r \"$p\"; then actual=$(cat \"$p\"); if test \"$actual\" = \"$child\" && kill -0 \"$actual\" 2>/dev/null && is_owned \"$actual\" \"$exe\"; then stable=$((stable+1)); test \"$stable\" -ge 3 && return 0; else stable=0; fi; fi; i=$((i+1)); sleep 0.1; done; if is_owned \"$child\" \"$exe\"; then kill \"$child\" 2>/dev/null || true; fi; rm -f \"$p\"; return 1; }; ";
     if (start_codex and start_hermes) {
         const codex = shQuote(&scratch.quote_b, remote_codex_watcher) orelse return null;
         const codex_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/codex-watch.pid") orelse return null;
         const hermes = shQuote(&scratch.quote_d, remote_hermes_watcher) orelse return null;
         const hermes_pid = shQuote(&scratch.quote_e, "~/.petdex/runtime/hermes-watch.pid") orelse return null;
-        buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s}; if test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &\nif test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &", .{ runtime, codex_pid, codex_pid, codex, hermes_pid, hermes_pid, hermes }) catch return null;
+        buf[n] = std.fmt.bufPrint(&scratch.cmd, "{s}start_one {s} {s} && start_one {s} {s} {s}", .{ helper, codex_pid, codex, hermes_pid, hermes, hermes_home }) catch return null;
     } else if (start_codex) {
         const codex = shQuote(&scratch.quote_b, remote_codex_watcher) orelse return null;
         const codex_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/codex-watch.pid") orelse return null;
-        buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s}; if test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &", .{ runtime, codex_pid, codex_pid, codex }) catch return null;
+        buf[n] = std.fmt.bufPrint(&scratch.cmd, "{s}start_one {s} {s}", .{ helper, codex_pid, codex }) catch return null;
     } else {
         const hermes = shQuote(&scratch.quote_b, remote_hermes_watcher) orelse return null;
         const hermes_pid = shQuote(&scratch.quote_c, "~/.petdex/runtime/hermes-watch.pid") orelse return null;
-        buf[n] = std.fmt.bufPrint(&scratch.cmd, "mkdir -p {s}; if test -r {s}; then old=$(cat {s}); case \"$old\" in ''|*[!0-9]*) ;; *) kill \"$old\" 2>/dev/null || true ;; esac; fi; nohup {s} >/dev/null 2>&1 </dev/null &", .{ runtime, hermes_pid, hermes_pid, hermes }) catch return null;
+        buf[n] = std.fmt.bufPrint(&scratch.cmd, "{s}start_one {s} {s} {s}", .{ helper, hermes_pid, hermes, hermes_home }) catch return null;
     }
     return buf[0 .. n + 1];
 }
@@ -373,11 +376,17 @@ fn joined(argv: []const []const u8, buf: []u8) []const u8 {
     return buf[0..n];
 }
 
+fn argvBytes(argv: []const []const u8) usize {
+    var total: usize = 0;
+    for (argv) |arg| total += arg.len;
+    return total;
+}
+
 test "appendBase puts safety flags before a quoted-free destination" {
     if (detect() == null) return;
     var buf: [max_argv][]const u8 = undefined;
     var scratch: Scratch = .{};
-    var line: [1024]u8 = undefined;
+    var line: [4096]u8 = undefined;
     const argv = probeArgv(&buf, &scratch, &test_remote).?;
     const text = joined(argv, &line);
     try t.expect(std.mem.indexOf(u8, text, "BatchMode=yes") != null);
@@ -404,6 +413,26 @@ test "appendBase omits -p and -i at their defaults" {
     }
 }
 
+test "probe and watcher honor a custom remote Hermes home" {
+    if (detect() == null) return;
+    const custom = Remote{
+        .name = "hermes",
+        .host = "host",
+        .agents = .{ .hermes = .{ .enabled = true, .home = "/srv/hermes data" } },
+    };
+    var buf: [max_argv][]const u8 = undefined;
+    var probe_scratch: Scratch = .{};
+    const probe = probeArgv(&buf, &probe_scratch, &custom).?;
+    try t.expect(std.mem.indexOf(u8, probe[probe.len - 1], "'/srv/hermes data'") != null);
+    var watcher_scratch: Scratch = .{};
+    const watcher = watcherArgv(&buf, &watcher_scratch, &custom, false, true).?;
+    try t.expect(std.mem.indexOf(u8, watcher[watcher.len - 1], "'/srv/hermes data'") != null);
+    var token_scratch: Scratch = .{};
+    const token = tokenArgv(&buf, &token_scratch, &custom).?;
+    try t.expect(std.mem.indexOf(u8, token[token.len - 1], "'/srv/hermes data'") != null);
+    try t.expect(std.mem.indexOf(u8, token[token.len - 1], "hermes-home") != null);
+}
+
 test "tunnelArgv requests the reverse forward with fast failure" {
     if (detect() == null) return;
     var buf: [max_argv][]const u8 = undefined;
@@ -421,7 +450,8 @@ test "tunnelArgv requests the reverse forward with fast failure" {
     try t.expectEqualStrings("-R" ++ tunnel_spec, argv[argv.len - 4]);
     try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], tunnel_ready_marker) != null);
     try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "/health") != null);
-    var line: [1024]u8 = undefined;
+    try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "rm -f \"$lease\" \"$token\"") != null);
+    var line: [4096]u8 = undefined;
     const text = joined(argv, &line);
     try t.expect(std.mem.indexOf(u8, text, "-N") == null);
     try t.expect(std.mem.indexOf(u8, text, "ExitOnForwardFailure=yes") != null);
@@ -434,10 +464,11 @@ test "quiesceArgv removes token and stops both feed watchers" {
     var scratch: Scratch = .{};
     const argv = quiesceArgv(&buf, &scratch, &test_remote).?;
     const command = argv[argv.len - 1];
-    try t.expect(std.mem.indexOf(u8, command, "rm -f \"$HOME\"/'.petdex/runtime/update-token'") != null);
+    try t.expect(std.mem.indexOf(u8, command, "rm -f \"$runtime/update-token\" \"$runtime/tunnel-lease\"") != null);
     try t.expect(std.mem.indexOf(u8, command, "codex-watch.pid") != null);
     try t.expect(std.mem.indexOf(u8, command, "hermes-watch.pid") != null);
     try t.expect(std.mem.indexOf(u8, command, "kill \"$old\"") != null);
+    try t.expect(std.mem.indexOf(u8, command, "ps -ww -p \"$old\" -o command=") != null);
     try t.expect(std.mem.endsWith(u8, command, "sleep 2"));
 }
 
@@ -454,25 +485,24 @@ test "read and write quote remote paths for the remote shell" {
     var buf: [max_argv][]const u8 = undefined;
     var scratch: Scratch = .{};
     const rd = readArgv(&buf, &scratch, &test_remote, remote_codex_hooks).?;
-    try t.expectEqualStrings("cat -- \"$HOME\"/'.codex/hooks.json'", rd[rd.len - 1]);
+    try t.expect(std.mem.indexOf(u8, rd[rd.len - 1], "exit 44") != null);
+    try t.expect(std.mem.indexOf(u8, rd[rd.len - 1], "cat -- \"$target\"") != null);
 
     var scratch2: Scratch = .{};
-    const wr = writeArgv(&buf, &scratch2, &test_remote, remote_opencode_plugin, true, false).?;
-    try t.expectEqualStrings(
-        "mkdir -p \"$HOME\"/'.config/opencode/plugins' && cat > \"$HOME\"/'.config/opencode/plugins/petdex.js'",
-        wr[wr.len - 1],
-    );
+    const wr = writeArgv(&buf, &scratch2, &test_remote, remote_opencode_plugin, true, false, false).?;
+    try t.expect(std.mem.indexOf(u8, wr[wr.len - 1], "cat > \"$tmp\"") != null);
+    try t.expect(std.mem.indexOf(u8, wr[wr.len - 1], ".petdex-tmp-${remote_name}") != null);
+    try t.expect(std.mem.indexOf(u8, wr[wr.len - 1], "mv -f") == null);
 
     var scratch3: Scratch = .{};
-    const app = writeArgv(&buf, &scratch3, &test_remote, remote_opencode_plugin, false, false).?;
-    try t.expectEqualStrings("cat >> \"$HOME\"/'.config/opencode/plugins/petdex.js'", app[app.len - 1]);
+    const app = writeArgv(&buf, &scratch3, &test_remote, remote_opencode_plugin, false, true, false).?;
+    try t.expect(std.mem.indexOf(u8, app[app.len - 1], "cat >> \"$tmp\"") != null);
+    try t.expect(std.mem.indexOf(u8, app[app.len - 1], "chmod 600 \"$tmp\" && mv -f") != null);
 
     var scratch4: Scratch = .{};
-    const exe = writeArgv(&buf, &scratch4, &test_remote, remote_hook_script, true, true).?;
-    try t.expectEqualStrings(
-        "mkdir -p \"$HOME\"/'.petdex/bin' && cat > \"$HOME\"/'.petdex/bin/petdex-hook' && chmod 755 \"$HOME\"/'.petdex/bin/petdex-hook'",
-        exe[exe.len - 1],
-    );
+    const exe = writeArgv(&buf, &scratch4, &test_remote, remote_hook_script, true, true, true).?;
+    try t.expect(std.mem.indexOf(u8, exe[exe.len - 1], "chmod 755 \"$tmp\" && mv -f") != null);
+    try t.expect(std.mem.indexOf(u8, exe[exe.len - 1], "readlink") != null);
 }
 
 test "shQuote escapes embedded quotes instead of trusting the path" {
@@ -506,6 +536,8 @@ test "watcherArgv replaces the selected Petdesk watchers and detaches cleanly" {
     try t.expect(std.mem.indexOf(u8, command, ".petdex/bin/petdex-hermes-watch") == null);
     try t.expect(std.mem.indexOf(u8, command, "nohup") != null);
     try t.expect(std.mem.indexOf(u8, command, "</dev/null &") != null);
+    try t.expect(std.mem.indexOf(u8, command, "kill -0 \"$actual\"") != null);
+    try t.expect(std.mem.indexOf(u8, command, "tunnel-lease") != null);
 
     var hermes_scratch: Scratch = .{};
     const hermes = watcherArgv(&buf, &hermes_scratch, &test_remote, false, true).?;
@@ -518,7 +550,29 @@ test "watcherArgv replaces the selected Petdesk watchers and detaches cleanly" {
     const both = watcherArgv(&buf, &both_scratch, &test_remote, true, true).?;
     try t.expect(std.mem.indexOf(u8, both[both.len - 1], "petdex-codex-watch") != null);
     try t.expect(std.mem.indexOf(u8, both[both.len - 1], "petdex-hermes-watch") != null);
+    try t.expect(argvBytes(both) <= 2048);
     try t.expect(watcherArgv(&buf, &scratch, &test_remote, false, false) == null);
+}
+
+test "remote argv builders stay inside the Native effect byte budget" {
+    if (detect() == null) return;
+    var host: [remote_agents.max_host_bytes]u8 = @splat('h');
+    var identity: [remote_agents.max_identity_bytes]u8 = @splat('i');
+    const home_len = remote_agents.max_transport_variable_bytes - host.len - identity.len;
+    var hermes_home: [home_len]u8 = @splat('h');
+    hermes_home[0] = '~';
+    hermes_home[1] = '/';
+    const largest = Remote{
+        .name = "largest",
+        .host = &host,
+        .identity_file = &identity,
+        .agents = .{ .hermes = .{ .enabled = true, .home = &hermes_home } },
+    };
+    try t.expect(remote_agents.validateRemote(&largest) == null);
+    var buf: [max_argv][]const u8 = undefined;
+    var scratch: Scratch = .{};
+    const argv = watcherArgv(&buf, &scratch, &largest, true, true).?;
+    try t.expect(argvBytes(argv) <= 2048);
 }
 
 test "chunkCount splits at the stdin budget" {

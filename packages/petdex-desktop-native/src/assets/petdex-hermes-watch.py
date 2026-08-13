@@ -19,6 +19,7 @@ import os
 import re
 import socket
 import sqlite3
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -26,9 +27,12 @@ from typing import Any
 
 
 HOME = Path.home()
-HERMES_ROOT = HOME / ".hermes"
+HERMES_ROOT = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else Path(
+    os.environ.get("HERMES_HOME") or (HOME / ".hermes")
+).expanduser()
 RUNTIME = HOME / ".petdex" / "runtime"
 TOKEN = RUNTIME / "update-token"
+LEASE = RUNTIME / "tunnel-lease"
 LOCK = RUNTIME / "hermes-watch.lock"
 PID = RUNTIME / "hermes-watch.pid"
 ENDPOINT = "http://127.0.0.1:7777/bubble"
@@ -56,6 +60,22 @@ SUBAGENT_SOURCES = {
 
 def compact(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def canonical_key(value: Any) -> str:
+    cleaned = " ".join(str(value or "").split())
+    if cleaned and len(cleaned) <= 64 and all(
+        char.isascii() and (char.isalnum() or char in "-_") for char in cleaned
+    ):
+        return cleaned
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest() if cleaned else ""
+
+
+def lease_alive() -> bool:
+    try:
+        return max(0.0, time.time() - LEASE.stat().st_mtime) <= 10.0
+    except OSError:
+        return False
 
 
 def active_home() -> Path:
@@ -101,12 +121,12 @@ def is_subagent(
     )
 
 
-def snapshot() -> list[dict[str, Any]]:
-    """Return at most eight recent top-level session metadata records."""
+def snapshot() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]] | None:
+    """Return active records plus terminal transitions for prior records."""
 
     db_path = active_home() / "state.db"
     if not db_path.is_file():
-        return []
+        return None
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.15) as db:
             columns = {str(row[1]) for row in db.execute("PRAGMA table_info(sessions)")}
@@ -123,53 +143,69 @@ def snapshot() -> list[dict[str, Any]]:
                 "ended_at",
             }
             if not required.issubset(columns):
-                return []
+                return None
             rows = db.execute(
                 """
                 SELECT id, session_key, title, source, model_config,
                        parent_session_id, started_at, last_activity_at,
-                       last_activity_description
+                       last_activity_description, ended_at
                 FROM sessions
-                WHERE ended_at IS NULL
                 ORDER BY COALESCE(last_activity_at, started_at) DESC
                 LIMIT 32
                 """
             ).fetchall()
     except (OSError, sqlite3.Error):
-        return []
+        return None
 
     now = time.time()
     hostname = compact(socket.gethostname(), 64)
     events: list[dict[str, Any]] = []
+    terminals: dict[str, dict[str, Any]] = {}
     for row in rows:
-        session_id = compact(row[0], 96)
-        if not session_id or is_subagent(row[3], row[4], row[5], row[1]):
+        source_session_id = compact(row[0], 96)
+        if not source_session_id or is_subagent(row[3], row[4], row[5], row[1]):
+            continue
+        conversation_key = canonical_key(row[1] or source_session_id)
+        if not conversation_key:
             continue
         activity = compact(row[8], 160)
         activity_at = timestamp(row[7] or row[6])
-        if (
+        title = compact(row[2], 256) or "Hermes session"
+        base = {
+            "agent_source": "hermes",
+            "remote": True,
+            "hostname": hostname,
+            "session_id": conversation_key,
+            "source_session_id": source_session_id,
+            "conversation_key": conversation_key,
+            "session_kind": "primary",
+            "title": title,
+            "title_source": "server",
+            "feed_source": "state-db",
+        }
+        ended = bool(row[9])
+        stale = (
             not activity
             or activity_at <= 0
             or max(0.0, now - activity_at) > ACTIVE_RECONCILE_MAX_AGE_SECONDS
-        ):
+        )
+        if ended or stale:
+            terminals[conversation_key] = {
+                **base,
+                "text": "Done." if ended else "Idle.",
+                "busy": False,
+                "event_kind": "session-end" if ended else "reconcile-idle",
+                "message_kind": "status",
+                "status": "completed" if ended else "idle",
+            }
             continue
-        title = compact(row[2], 256) or "Hermes session"
         events.append(
             {
+                **base,
                 # This is intentionally metadata-only. Rich assistant prose
                 # comes from lifecycle hooks once a running gateway reloads.
                 "text": activity,
                 "busy": True,
-                "agent_source": "hermes",
-                "remote": True,
-                "hostname": hostname,
-                "session_id": session_id,
-                "source_session_id": session_id,
-                "conversation_key": compact(row[1], 96) or session_id,
-                "session_kind": "primary",
-                "title": title,
-                "title_source": "server",
-                "feed_source": "state-db",
                 "event_kind": "reconcile",
                 "message_kind": "status",
                 "status": "running",
@@ -177,7 +213,7 @@ def snapshot() -> list[dict[str, Any]]:
         )
         if len(events) >= MAX_WATCHES:
             break
-    return events
+    return events, terminals
 
 
 def digest(event: dict[str, Any]) -> str:
@@ -210,29 +246,47 @@ def post(event: dict[str, Any]) -> bool:
 
 def run() -> int:
     RUNTIME.mkdir(parents=True, exist_ok=True)
+    if not lease_alive():
+        return 75
     with LOCK.open("w", encoding="utf-8") as lock:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return 0
         PID.write_text(str(os.getpid()), encoding="utf-8")
-        previous: dict[str, str] = {}
+        previous: dict[str, dict[str, Any]] = {}
         try:
-            while True:
+            while lease_alive():
+                result = snapshot()
+                if result is None:
+                    time.sleep(DISCOVERY_SECONDS)
+                    continue
+                active, terminals = result
                 current: set[str] = set()
-                for event in snapshot():
+                for event in active:
                     key = str(event["conversation_key"])
                     current.add(key)
                     value = digest(event)
-                    if previous.get(key) == value:
+                    if previous.get(key, {}).get("digest") == value:
                         continue
                     # Keep retrying a new event until the reverse tunnel is
                     # available; only a successful post advances the digest.
                     if post(event):
-                        previous[key] = value
+                        previous[key] = {"digest": value, "event": event}
                 for key in tuple(previous):
                     if key not in current:
-                        previous.pop(key, None)
+                        terminal = terminals.get(key)
+                        if terminal is None:
+                            terminal = {
+                                **previous[key]["event"],
+                                "text": "Idle.",
+                                "busy": False,
+                                "event_kind": "reconcile-idle",
+                                "message_kind": "status",
+                                "status": "idle",
+                            }
+                        if post(terminal):
+                            previous.pop(key, None)
                 time.sleep(DISCOVERY_SECONDS)
         finally:
             try:

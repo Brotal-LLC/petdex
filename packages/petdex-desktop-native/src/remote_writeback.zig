@@ -71,14 +71,19 @@ pub fn remotePath(
     kind: AgentKind,
     rel: []const u8,
     hermes_profile: []const u8,
+    hermes_home: []const u8,
 ) ?[]const u8 {
-    if (kind == .hermes and hermes_profile.len > 0) {
+    if (kind == .hermes) {
         const prefix = ".hermes/";
         if (!std.mem.startsWith(u8, rel, prefix)) return null;
-        return std.fmt.bufPrint(buf, "~/.hermes/profiles/{s}/{s}", .{
-            hermes_profile,
-            rel[prefix.len..],
-        }) catch null;
+        if (hermes_profile.len > 0) {
+            return std.fmt.bufPrint(buf, "{s}/profiles/{s}/{s}", .{
+                hermes_home,
+                hermes_profile,
+                rel[prefix.len..],
+            }) catch null;
+        }
+        return std.fmt.bufPrint(buf, "{s}/{s}", .{ hermes_home, rel[prefix.len..] }) catch null;
     }
     return std.fmt.bufPrint(buf, "~/{s}", .{rel}) catch null;
 }
@@ -103,15 +108,40 @@ fn needsHermesWatcher(kind: AgentKind) bool {
 /// Stage one fetched remote file into the fake home. Null bytes mean
 /// the remote file does not exist (ssh cat failed) — nothing staged,
 /// and the installer treats it as a fresh install.
+pub fn prepareStaging(fake_home: []const u8) bool {
+    if (!plat.deleteTree(fake_home)) return false;
+    return plat.makeDirMode(fake_home, 0o700);
+}
+
+pub fn cleanupStaging(fake_home: []const u8) void {
+    _ = plat.deleteTree(fake_home);
+}
+
+pub fn cleanupStagingRoot(home: []const u8) void {
+    var root_buf: [512]u8 = undefined;
+    const root = std.fmt.bufPrint(&root_buf, "{s}/.petdex/runtime/remote-wb", .{home}) catch return;
+    _ = plat.deleteTree(root);
+}
+
 pub fn stageFetched(fake_home: []const u8, rel: []const u8, bytes: ?[]const u8) bool {
     const content = bytes orelse return true;
+    if (!safeRelativePath(rel)) return false;
     var path_buf: [512]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ fake_home, rel }) catch return false;
     var dir_buf: [512]u8 = undefined;
     const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return false;
     const dir = std.fmt.bufPrint(&dir_buf, "{s}", .{path[0..slash]}) catch return false;
     plat.makeDir(dir);
-    return plat.writeFile(path, content);
+    return plat.writeFileMode(path, content, 0o600);
+}
+
+fn safeRelativePath(rel: []const u8) bool {
+    if (rel.len == 0 or rel[0] == '/') return false;
+    var components = std.mem.splitScalar(u8, rel, '/');
+    while (components.next()) |component| {
+        if (component.len == 0 or std.mem.eql(u8, component, ".") or std.mem.eql(u8, component, "..")) return false;
+    }
+    return true;
 }
 
 /// Run the agent's own installer against the fake home — the same
@@ -129,7 +159,11 @@ pub fn runInstaller(allocator: std.mem.Allocator, kind: AgentKind, fake_home: []
     return switch (kind) {
         .opencode => agent_hooks.installOpencode(allocator, fake_home),
         .codex => agent_hooks.installCodex(allocator, fake_home),
-        .hermes => agent_hooks.installHermes(allocator, fake_home),
+        .hermes => blk: {
+            var hermes_buf: [512]u8 = undefined;
+            const hermes_dir = std.fmt.bufPrint(&hermes_buf, "{s}/.hermes", .{fake_home}) catch break :blk false;
+            break :blk agent_hooks.installHermesAt(allocator, hermes_dir);
+        },
         else => false,
     };
 }
@@ -142,6 +176,7 @@ pub fn collectOutputs(
     kind: AgentKind,
     fake_home: []const u8,
     hermes_profile: []const u8,
+    hermes_home: []const u8,
 ) ?[]Output {
     const files = filesFor(kind) orelse return null;
     const extra: usize = @as(usize, if (needsHookScript(kind)) 1 else 0) +
@@ -153,7 +188,7 @@ pub fn collectOutputs(
         const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ fake_home, rel }) catch return null;
         const bytes = plat.readFileAlloc(allocator, path, 1024 * 1024) orelse return null;
         var remote_buf: [512]u8 = undefined;
-        const remote = remotePath(&remote_buf, kind, rel, hermes_profile) orelse return null;
+        const remote = remotePath(&remote_buf, kind, rel, hermes_profile, hermes_home) orelse return null;
         out[i] = .{
             .rel = allocator.dupe(u8, rel) catch return null,
             .remote = allocator.dupe(u8, remote) catch return null,
@@ -211,7 +246,7 @@ test "codex writeback merges a fetched remote hooks.json" {
 
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
-    const outs = collectOutputs(arena.allocator(), .codex, fake, "").?;
+    const outs = collectOutputs(arena.allocator(), .codex, fake, "", "~/.hermes").?;
     try t.expectEqual(@as(usize, 4), outs.len);
     try t.expectEqualStrings(".codex/hooks.json", outs[0].rel);
     try t.expectEqualStrings("~/.codex/hooks.json", outs[0].remote);
@@ -226,7 +261,7 @@ test "codex writeback merges a fetched remote hooks.json" {
     try t.expect(outs[3].executable);
     try t.expect(std.mem.indexOf(u8, outs[3].bytes, "request_user_input") != null);
     try t.expect(std.mem.indexOf(u8, outs[3].bytes, "recent_rollouts(catalog)") != null);
-    try t.expect(std.mem.indexOf(u8, outs[3].bytes, "title or fallback_title") != null);
+    try t.expect(std.mem.indexOf(u8, outs[3].bytes, "title or state[\"fallback_title\"]") != null);
     try t.expect(std.mem.indexOf(u8, outs[3].bytes, "initial_publishable(event, path)") != null);
     try t.expect(std.mem.indexOf(u8, outs[3].bytes, "INITIAL_RUNNING_MAX_AGE_SECONDS") != null);
 }
@@ -241,7 +276,9 @@ test "remote watcher initial reconciliation excludes stale unfinished work" {
     try t.expect(std.mem.indexOf(u8, codex_watcher_script, "if event.get(\"status\") == \"needs_input\"") != null);
     try t.expect(std.mem.indexOf(u8, codex_watcher_script, "if event.get(\"status\") != \"running\"") != null);
     try t.expect(std.mem.indexOf(u8, codex_watcher_script, "current - modified) <= INITIAL_RUNNING_MAX_AGE_SECONDS") != null);
-    try t.expect(std.mem.indexOf(u8, codex_watcher_script, "should_publish = not initial or initial_publishable(event, path)") != null);
+    try t.expect(std.mem.indexOf(u8, codex_watcher_script, "should_publish = initial_publishable(event, path)") != null);
+    try t.expect(std.mem.indexOf(u8, codex_watcher_script, "append_rollout_state") != null);
+    try t.expect(std.mem.indexOf(u8, codex_watcher_script, "event_hash == previous.get(\"delivered_hash\")") != null);
 }
 
 test "Hermes watcher reconciles only current metadata" {
@@ -253,6 +290,8 @@ test "Hermes watcher reconciles only current metadata" {
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "str(session_key") != null);
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "\"feed_source\": \"state-db\"") != null);
     try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "SELECT content") == null);
+    try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "lease_alive") != null);
+    try t.expect(std.mem.indexOf(u8, hermes_watcher_script, "\"status\": \"completed\" if ended else \"idle\"") != null);
 }
 
 test "remote hook preserves Codex conversation metadata and rich updates" {
@@ -270,7 +309,8 @@ test "remote hook preserves Codex conversation metadata and rich updates" {
     try t.expect(std.mem.indexOf(u8, hook_script, "approval-request") != null);
     try t.expect(std.mem.indexOf(u8, hook_script, "child_session_id") != null);
     try t.expect(std.mem.indexOf(u8, hook_script, "_delegate_from") != null);
-    try t.expect(std.mem.indexOf(u8, hook_script, "kind = \"subagent\" if agent == \"hermes\"") != null);
+    try t.expect(std.mem.indexOf(u8, hook_script, "kind = \"subagent\" if force_subagent == \"true\" else \"primary\"") != null);
+    try t.expect(std.mem.indexOf(u8, hook_script, "session_id\\\":\\\"$conversation_key") != null);
     try t.expect(std.mem.indexOf(u8, hook_script, "not bool(row.get(\"session_key\"))") != null);
     try t.expect(std.mem.indexOf(u8, hook_script, "[ \"$session_kind\" = \"subagent\" ]") != null);
     try t.expect(std.mem.indexOf(u8, hook_script, "child_summary") != null);
@@ -296,7 +336,7 @@ test "hermes writeback preserves foreign YAML and allowlist entries" {
 
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
-    const outs = collectOutputs(arena.allocator(), .hermes, fake, "").?;
+    const outs = collectOutputs(arena.allocator(), .hermes, fake, "", "~/.hermes").?;
     try t.expectEqual(@as(usize, 6), outs.len);
     try t.expect(std.mem.indexOf(u8, outs[0].bytes, "my-own-linter") != null);
     try t.expect(std.mem.indexOf(u8, outs[0].bytes, "petdex-hook") != null);
@@ -310,6 +350,28 @@ test "hermes writeback preserves foreign YAML and allowlist entries" {
     try t.expect(std.mem.indexOf(u8, outs[5].bytes, "metadata-only") != null);
 }
 
+test "remote Hermes writeback ignores the local HERMES_HOME" {
+    if (@import("builtin").os.tag == .windows) return;
+    const fake = ".zig-cache/petdex-wb-hermes-isolated";
+    const live = ".zig-cache/petdex-wb-hermes-live";
+    cleanupStaging(fake);
+    cleanupStaging(live);
+    try t.expect(prepareStaging(fake));
+    try t.expect(plat.makeDirMode(live, 0o700));
+    const saved = agent_hooks.env_hermes_home;
+    defer agent_hooks.env_hermes_home = saved;
+    agent_hooks.env_hermes_home = live;
+
+    try t.expect(runInstaller(t.allocator, .hermes, fake));
+    try t.expect(plat.fileExists(fake ++ "/.hermes/config.yaml"));
+    try t.expect(!plat.fileExists(live ++ "/config.yaml"));
+}
+
+test "staging rejects paths that escape the private fake home" {
+    try t.expect(!stageFetched(".zig-cache/petdex-wb-safe", "../outside", "x"));
+    try t.expect(!stageFetched(".zig-cache/petdex-wb-safe", "/absolute", "x"));
+}
+
 test "opencode writeback is the plugin alone, no hook script" {
     if (@import("builtin").os.tag == .windows) return;
     const fake = ".zig-cache/petdex-wb-opencode";
@@ -319,7 +381,7 @@ test "opencode writeback is the plugin alone, no hook script" {
 
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
-    const outs = collectOutputs(arena.allocator(), .opencode, fake, "").?;
+    const outs = collectOutputs(arena.allocator(), .opencode, fake, "", "~/.hermes").?;
     try t.expectEqual(@as(usize, 1), outs.len);
     try t.expectEqualStrings("~/.config/opencode/plugins/petdex.js", outs[0].remote);
     try t.expect(std.mem.indexOf(u8, outs[0].bytes, "HOOK_SERVER_URL") != null);
@@ -334,7 +396,7 @@ test "Hermes writeback targets the active profile home" {
 
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
-    const outs = collectOutputs(arena.allocator(), .hermes, fake, "snoop").?;
+    const outs = collectOutputs(arena.allocator(), .hermes, fake, "snoop", "~/.hermes").?;
     try t.expectEqualStrings("~/.hermes/profiles/snoop/config.yaml", outs[0].remote);
     try t.expectEqualStrings("~/.hermes/profiles/snoop/shell-hooks-allowlist.json", outs[1].remote);
     try t.expectEqualStrings("~/.hermes/profiles/snoop/plugins/petdex-desktop/plugin.yaml", outs[2].remote);

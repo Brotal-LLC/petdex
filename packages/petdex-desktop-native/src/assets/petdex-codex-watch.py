@@ -24,6 +24,7 @@ HOME = Path.home()
 CODEX = HOME / ".codex"
 RUNTIME = HOME / ".petdex" / "runtime"
 TOKEN = RUNTIME / "update-token"
+LEASE = RUNTIME / "tunnel-lease"
 LOCK = RUNTIME / "codex-watch.lock"
 PID = RUNTIME / "codex-watch.pid"
 INDEX = CODEX / "session_index.jsonl"
@@ -61,6 +62,13 @@ def bounded_tail(path: Path, limit: int) -> bytes:
 
 def compact(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def lease_alive() -> bool:
+    try:
+        return max(0.0, time.time() - LEASE.stat().st_mtime) <= 10.0
+    except OSError:
+        return False
 
 
 def session_index() -> list[dict[str, str]]:
@@ -138,24 +146,42 @@ def request_prompt(arguments: Any) -> str:
     return "Waiting for you…"
 
 
-def parse_rollout(path: Path, title: str) -> dict[str, Any] | None:
-    raw = bounded_tail(path, MAX_ROLLOUT_BYTES).decode("utf-8", "ignore")
-    if not raw:
-        return None
-    status = "idle"
-    text = ""
-    message_kind = "status"
-    turn_id = ""
-    cwd = ""
-    lifecycle = False
-    pending: dict[str, str] = {}
-    newest_message_id = ""
-    resolved_request_id = ""
-    fallback_title = ""
+def new_rollout_state() -> dict[str, Any]:
+    return {
+        "status": "idle",
+        "text": "",
+        "message_kind": "status",
+        "turn_id": "",
+        "cwd": "",
+        "lifecycle": False,
+        "pending": {},
+        "newest_message_id": "",
+        "resolved_request_id": "",
+        "fallback_title": "",
+        "partial": b"",
+    }
 
-    for line in raw.splitlines():
+
+def apply_rollout_bytes(state: dict[str, Any], raw: bytes) -> None:
+    data = state.get("partial", b"") + raw
+    lines = data.split(b"\n")
+    if data and not data.endswith(b"\n"):
+        candidate = lines.pop()
         try:
-            envelope = json.loads(line)
+            json.loads(candidate.decode("utf-8", "ignore"))
+        except Exception:
+            state["partial"] = candidate[-MAX_ROLLOUT_BYTES:]
+        else:
+            state["partial"] = b""
+            lines.append(candidate)
+    else:
+        state["partial"] = b""
+    pending: dict[str, str] = state["pending"]
+    for encoded_line in lines:
+        if not encoded_line:
+            continue
+        try:
+            envelope = json.loads(encoded_line.decode("utf-8", "ignore"))
         except Exception:
             continue
         payload = envelope.get("payload")
@@ -165,37 +191,38 @@ def parse_rollout(path: Path, title: str) -> dict[str, Any] | None:
         event_type = payload.get("type")
 
         if outer == "session_meta":
-            cwd = compact(payload.get("cwd"), 512)
+            state["cwd"] = compact(payload.get("cwd"), 512)
             continue
-        if event_type == "user_message" and not fallback_title:
-            fallback_title = compact(payload.get("message"), 256)
+        if event_type == "user_message" and not state["fallback_title"]:
+            state["fallback_title"] = compact(payload.get("message"), 256)
             continue
         if event_type == "task_started":
-            lifecycle = True
-            status = "running"
-            text = ""
-            message_kind = "status"
-            turn_id = compact(payload.get("turn_id"), 64)
+            state["lifecycle"] = True
+            state["status"] = "running"
+            state["text"] = ""
+            state["message_kind"] = "status"
+            state["turn_id"] = compact(payload.get("turn_id"), 64)
+            state["resolved_request_id"] = ""
             pending.clear()
             continue
         if event_type == "task_complete":
-            lifecycle = True
-            status = "completed"
-            turn_id = compact(payload.get("turn_id"), 64) or turn_id
+            state["lifecycle"] = True
+            state["status"] = "completed"
+            state["turn_id"] = compact(payload.get("turn_id"), 64) or state["turn_id"]
             pending.clear()
             final = compact(payload.get("last_agent_message"), 960)
             if final:
-                text = final
-                message_kind = "assistant"
+                state["text"] = final
+                state["message_kind"] = "assistant"
             continue
         if event_type in {"turn_aborted", "task_failed"}:
-            lifecycle = True
-            status = "failed"
-            turn_id = compact(payload.get("turn_id"), 64) or turn_id
+            state["lifecycle"] = True
+            state["status"] = "failed"
+            state["turn_id"] = compact(payload.get("turn_id"), 64) or state["turn_id"]
             pending.clear()
             reason = compact(payload.get("reason"), 80).lower()
-            text = "Interrupted." if reason == "interrupted" else "Session failed."
-            message_kind = "status"
+            state["text"] = "Interrupted." if reason == "interrupted" else "Session failed."
+            state["message_kind"] = "status"
             continue
         if outer == "response_item" and event_type == "function_call":
             name = str(payload.get("name") or "")
@@ -210,47 +237,54 @@ def parse_rollout(path: Path, title: str) -> dict[str, Any] | None:
             if name == "request_user_input" or requires_approval:
                 call_id = compact(payload.get("call_id") or payload.get("id") or "input-request", 96)
                 pending[call_id] = request_prompt(parsed_arguments)
-                newest_message_id = call_id
-                status = "needs_input"
-                text = pending[call_id]
-                message_kind = "prompt"
+                state["newest_message_id"] = call_id
+                state["status"] = "needs_input"
+                state["text"] = pending[call_id]
+                state["message_kind"] = "prompt"
             continue
         if outer == "response_item" and event_type in {"function_call_output", "custom_tool_call_output"}:
             call_id = compact(payload.get("call_id") or payload.get("id"), 96)
             if call_id in pending:
                 pending.pop(call_id, None)
-                resolved_request_id = call_id
-                newest_message_id = call_id
+                state["resolved_request_id"] = call_id
+                state["newest_message_id"] = call_id
                 if not pending:
-                    status = "running"
-                    text = "Thinking…"
-                    message_kind = "status"
+                    state["status"] = "running"
+                    state["text"] = "Thinking…"
+                    state["message_kind"] = "status"
             continue
         if event_type == "agent_message":
             message = compact(payload.get("message"), 960)
             if message:
-                text = message
-                message_kind = "assistant"
-                newest_message_id = compact(payload.get("id") or envelope.get("timestamp"), 96)
+                state["text"] = message
+                state["message_kind"] = "assistant"
+                state["newest_message_id"] = compact(payload.get("id") or envelope.get("timestamp"), 96)
             continue
         if event_type == "agent_reasoning":
             reasoning = compact(payload.get("text"), 960)
-            if reasoning and message_kind != "assistant":
-                text = reasoning
-                message_kind = "reasoning"
-                newest_message_id = compact(payload.get("id") or envelope.get("timestamp"), 96)
+            if reasoning and state["message_kind"] != "assistant":
+                state["text"] = reasoning
+                state["message_kind"] = "reasoning"
+                state["newest_message_id"] = compact(payload.get("id") or envelope.get("timestamp"), 96)
 
+
+def event_from_state(path: Path, title: str, state: dict[str, Any]) -> dict[str, Any] | None:
+    pending: dict[str, str] = state["pending"]
+    status = state["status"]
+    text = state["text"]
+    message_kind = state["message_kind"]
+    newest_message_id = state["newest_message_id"]
     if pending:
         status = "needs_input"
         newest_message_id, text = next(reversed(pending.items()))
         message_kind = "prompt"
-    elif not lifecycle:
+    elif not state["lifecycle"]:
         if not text:
             return None
         status = "running"
     if not text:
         text = "Thinking…" if status == "running" else "Done."
-    resolved_title = title or fallback_title
+    resolved_title = title or state["fallback_title"]
     event_kind = {
         "needs_input": "request_user_input",
         "completed": "session-end",
@@ -268,17 +302,53 @@ def parse_rollout(path: Path, title: str) -> dict[str, Any] | None:
         "session_kind": "primary",
         "hostname": compact(socket.gethostname(), 64),
         "remote": True,
-        "source_cwd": cwd,
-        "turn_id": turn_id,
+        "source_cwd": state["cwd"],
+        "turn_id": state["turn_id"],
         "message_id": newest_message_id,
         "event_kind": event_kind,
         "request_id": newest_message_id if status == "needs_input" else "",
-        "resolves_request_id": resolved_request_id if status != "needs_input" else "",
+        "resolves_request_id": state["resolved_request_id"] if status != "needs_input" else "",
         "message_kind": message_kind,
-        "title_source": "server" if title else ("prompt" if fallback_title else "unknown"),
+        "title_source": "server" if title else ("prompt" if state["fallback_title"] else "unknown"),
         "feed_source": "rollout",
         "status": status,
     }
+
+
+def initial_rollout_state(path: Path) -> tuple[dict[str, Any], int] | None:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    raw = bounded_tail(path, MAX_ROLLOUT_BYTES)
+    if not raw:
+        return None
+    state = new_rollout_state()
+    apply_rollout_bytes(state, raw)
+    return state, size
+
+
+def append_rollout_state(path: Path, state: dict[str, Any], offset: int, size: int) -> tuple[dict[str, Any], int] | None:
+    if size < offset or size - offset > MAX_ROLLOUT_BYTES:
+        return initial_rollout_state(path)
+    if size == offset:
+        return state, offset
+    try:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            raw = handle.read(size - offset)
+    except OSError:
+        return None
+    apply_rollout_bytes(state, raw)
+    return state, size
+
+
+def parse_rollout(path: Path, title: str) -> dict[str, Any] | None:
+    loaded = initial_rollout_state(path)
+    if loaded is None:
+        return None
+    state, _ = loaded
+    return event_from_state(path, title, state)
 
 
 def digest(event: dict[str, Any]) -> str:
@@ -338,6 +408,8 @@ def snapshot() -> list[dict[str, Any]]:
 
 def run() -> int:
     RUNTIME.mkdir(parents=True, exist_ok=True)
+    if not lease_alive():
+        return 75
     lock_handle = LOCK.open("a+")
     try:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -350,7 +422,7 @@ def run() -> int:
     last_discovery = 0.0
 
     try:
-        while True:
+        while lease_alive():
             now = time.monotonic()
             if now - last_discovery >= DISCOVERY_SECONDS:
                 last_discovery = now
@@ -363,6 +435,8 @@ def run() -> int:
                     if len(discovered) >= MAX_WATCHES:
                         break
                 paths = discovered
+                for stale_id in set(watched) - set(paths):
+                    watched.pop(stale_id, None)
 
             for session_id, path in list(paths.items()):
                 try:
@@ -371,24 +445,56 @@ def run() -> int:
                     continue
                 previous = watched.get(session_id)
                 title = titles.get(session_id, "")
-                if previous and previous.get("size") == size and previous.get("title") == title:
-                    continue
-                event = parse_rollout(path, title)
+                path_changed = previous is not None and previous.get("path") != str(path)
+                if previous is None or path_changed:
+                    loaded = initial_rollout_state(path)
+                    if loaded is None:
+                        continue
+                    state, offset = loaded
+                    previous = {
+                        "state": state,
+                        "offset": offset,
+                        "size": size,
+                        "title": title,
+                        "path": str(path),
+                        "delivered_hash": "",
+                        "visible": False,
+                    }
+                    watched[session_id] = previous
+                    initial = True
+                    size_changed = True
+                else:
+                    initial = False
+                    size_changed = previous.get("size") != size
+                    if size_changed:
+                        loaded = append_rollout_state(
+                            path,
+                            previous["state"],
+                            int(previous["offset"]),
+                            size,
+                        )
+                        if loaded is None:
+                            continue
+                        previous["state"], previous["offset"] = loaded
+                    previous["size"] = size
+                    previous["title"] = title
+                event = event_from_state(path, title, previous["state"])
                 if not event:
                     continue
                 event["conversation_key"] = session_id
                 event["source_session_id"] = session_id
                 event["session_id"] = session_id
                 event_hash = digest(event)
-                initial = previous is None
-                should_publish = not initial or initial_publishable(event, path)
-                delivered = not should_publish or post(event)
-                if delivered:
-                    watched[session_id] = {
-                        "size": size,
-                        "title": title,
-                        "hash": event_hash,
-                    }
+                if event_hash == previous.get("delivered_hash"):
+                    continue
+                if not previous.get("visible"):
+                    should_publish = initial_publishable(event, path) if initial or size_changed else False
+                    if not should_publish:
+                        previous["delivered_hash"] = event_hash
+                        continue
+                    previous["visible"] = True
+                if post(event):
+                    previous["delivered_hash"] = event_hash
             time.sleep(FOLLOW_SECONDS)
     finally:
         try:

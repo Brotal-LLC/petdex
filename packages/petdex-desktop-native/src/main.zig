@@ -1571,7 +1571,7 @@ fn runRemoteAction(model: *Model, slot_idx: usize, action: remote_runtime.Action
                 .quiesce => remote_ssh.quiesceArgv(&argv_buf, &scratch, &remote),
                 .profile => remote_ssh.probeArgv(&argv_buf, &scratch, &remote),
                 .fetch => remote_ssh.readArgv(&argv_buf, &scratch, &remote, spec.path),
-                .push => remote_ssh.writeArgv(&argv_buf, &scratch, &remote, spec.path, spec.first_chunk, spec.executable),
+                .push => remote_ssh.writeArgv(&argv_buf, &scratch, &remote, spec.path, spec.first_chunk, spec.last_chunk, spec.executable),
                 .token => remote_ssh.tokenArgv(&argv_buf, &scratch, &remote),
                 .watcher => remote_ssh.watcherArgv(&argv_buf, &scratch, &remote, spec.watch_codex, spec.watch_hermes),
                 .tunnel => if (env_home) |home|
@@ -1602,6 +1602,9 @@ fn runRemoteAction(model: *Model, slot_idx: usize, action: remote_runtime.Action
 /// pets never depend on remotes.
 fn startRemotes(model: *Model, fx: *Effects) void {
     const home = env_home orelse return;
+    // A crash can strand private fetch snapshots; they are never inputs to a
+    // later run, so remove them before reading any remote configuration.
+    remote_writeback.cleanupStagingRoot(home);
     if (remote_ssh.detect() == null) return;
     if (!remote_ssh.installTunnelSupervisor(home)) {
         std.debug.print("petdex: could not install the ssh tunnel supervisor; remotes disabled\n", .{});
@@ -1968,7 +1971,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 }
                 fx.cancel(remote_runtime.backoffKey(decoded.slot));
             }
-            const action = remote_runtime.onSpawnExit(slot, decoded.slot, decoded.op, exit.code, exit.output, home);
+            const action = remote_runtime.onSpawnExitDetailed(slot, decoded.slot, decoded.op, exit.code, exit.output, exit.output_truncated, home);
             runRemoteAction(model, decoded.slot, action, fx);
         },
         .remote_backoff => |timer| {
@@ -3878,6 +3881,10 @@ pub fn main(init: std.process.Init) !void {
         .fonts = app_fonts,
         .on_appearance = onAppearance,
     });
+    defer if (env_home) |home| remote_writeback.cleanupStagingRoot(home);
+    defer remote_runtime.deinitWritebacks();
+    // Effect workers can still own stdin slices from the writeback arenas.
+    // Tear the app down (and join those workers) before reclaiming the arenas.
     defer app_state.destroy();
     app_state.model = .{};
 
