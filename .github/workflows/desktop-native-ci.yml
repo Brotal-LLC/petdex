@@ -697,6 +697,7 @@ jobs:
             echo "FAIL: the pushed hook script never reached the hook server"
             curl -fsS http://127.0.0.1:7777/state || true; exit 1; }
           kill "$APP_PID" || true
+          wait "$APP_PID" 2>/dev/null || true
           # The tunnel owns the feed lease. Its exit revokes the token and
           # both detached watchers must clean up without waiting for another
           # Petdex launch.

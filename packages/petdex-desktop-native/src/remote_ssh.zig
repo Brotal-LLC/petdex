@@ -218,7 +218,7 @@ pub fn tunnelArgv(
     buf[destination_idx + 1] = std.fmt.bufPrint(&scratch.reverse, "-R{s}", .{tunnel_spec}) catch return null;
     buf[destination_idx + 2] = separator;
     buf[destination_idx + 3] = destination;
-    buf[destination_idx + 4] = std.fmt.bufPrint(&scratch.cmd, "umask 077; runtime=\"$HOME/.petdex/runtime\"; lease=\"$runtime/tunnel-lease\"; token=\"$runtime/update-token\"; mkdir -p \"$runtime\" || exit; rm -f \"$lease\"; trap 'rm -f \"$lease\" \"$token\"' 0 1 2 15; i=0; while :; do if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 1 http://127.0.0.1:7777/health >/dev/null 2>&1 && break; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:7777/health\",timeout=1).read()' >/dev/null 2>&1 && break; else exit 69; fi; i=$((i+1)); test \"$i\" -ge 20 && exit 75; sleep 1; done; : > \"$lease\" || exit; printf '{s}\\n'; while :; do : > \"$lease\" || exit; sleep 2; done", .{tunnel_ready_marker}) catch return null;
+    buf[destination_idx + 4] = std.fmt.bufPrint(&scratch.cmd, "umask 077; runtime=\"$HOME/.petdex/runtime\"; lease=\"$runtime/tunnel-lease\"; token=\"$runtime/update-token\"; mkdir -p \"$runtime\" || exit; command -v ps >/dev/null 2>&1 || exit 69; owner=$PPID; owner_alive() {{ kill -0 \"$owner\" 2>/dev/null || return 1; state=$(ps -o stat= -p \"$owner\" 2>/dev/null) || return 1; case \"$state\" in *Z*) return 1 ;; esac; return 0; }}; rm -f \"$lease\"; trap 'rm -f \"$lease\" \"$token\"' 0; trap 'trap - 0 1 2 15; rm -f \"$lease\" \"$token\"; exit 143' 1 2 15; i=0; while owner_alive; do if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 1 http://127.0.0.1:7777/health >/dev/null 2>&1 && break; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:7777/health\",timeout=1).read()' >/dev/null 2>&1 && break; else exit 69; fi; i=$((i+1)); test \"$i\" -ge 20 && exit 75; sleep 1; done; owner_alive || exit 75; : > \"$lease\" || exit; printf '{s}\\n'; while owner_alive; do : > \"$lease\" || exit; sleep 2; done", .{tunnel_ready_marker}) catch return null;
 
     const ssh_len = n + 3;
     var i = ssh_len;
@@ -451,6 +451,9 @@ test "tunnelArgv requests the reverse forward with fast failure" {
     try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], tunnel_ready_marker) != null);
     try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "/health") != null);
     try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "rm -f \"$lease\" \"$token\"") != null);
+    try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "exit 143' 1 2 15") != null);
+    try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "owner=$PPID") != null);
+    try t.expect(std.mem.indexOf(u8, argv[argv.len - 1], "while owner_alive") != null);
     var line: [4096]u8 = undefined;
     const text = joined(argv, &line);
     try t.expect(std.mem.indexOf(u8, text, "-N") == null);
@@ -573,6 +576,9 @@ test "remote argv builders stay inside the Native effect byte budget" {
     var scratch: Scratch = .{};
     const argv = watcherArgv(&buf, &scratch, &largest, true, true).?;
     try t.expect(argvBytes(argv) <= 2048);
+    var tunnel_scratch: Scratch = .{};
+    const tunnel = tunnelArgv(&buf, &tunnel_scratch, &largest, "/tmp/petdex-home", 4242).?;
+    try t.expect(argvBytes(tunnel) <= 2048);
 }
 
 test "chunkCount splits at the stdin budget" {
