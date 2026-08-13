@@ -32,6 +32,7 @@ const catalog = &catalog_mod.catalog;
 const catalog_len = &catalog_mod.catalog_len;
 const max_catalog = catalog_mod.max_catalog;
 const agent_hooks = @import("agent_hooks.zig");
+const remote_runtime = @import("remote_runtime.zig");
 const settingsBackground = app.settingsBackground;
 
 /// Where the agent logos are, handed in so this file does not reach into
@@ -191,6 +192,41 @@ fn agentsSection(ui: *AppUi, model: *const Model, icons: IconAtlas) AppUi.Node {
     return ui.column(.{ .gap = 12 }, @as([]const AppUi.Node, rows[0..count]));
 }
 
+/// SSH remotes running agents whose hooks ride the reverse tunnel.
+/// Read-only by design: remotes are declared in
+/// ~/.petdex/remote-agents.json and the section only reports what the
+/// runtime is doing with them. Hidden entirely when nothing is
+/// configured. A user without the feature gets no noise.
+fn remoteSection(ui: *AppUi, model: *const Model) AppUi.Node {
+    if (model.remote_count == 0) return ui.el(.stack, .{}, .{});
+    var rows: [remote_runtime.max_remotes]AppUi.Node = undefined;
+    var count: usize = 0;
+    for (model.remotes[0..model.remote_count]) |*slot| {
+        if (!slot.active) continue;
+        rows[count] = ui.el(.panel, .{
+            .padding = 12,
+            .gap = 12,
+            .cross = .center,
+            .style_tokens = .{ .background = .surface, .radius = .md },
+            .semantics = .{ .label = slot.nameSlice() },
+        }, .{
+            ui.row(.{ .gap = 12, .cross = .center }, .{
+                ui.column(.{ .grow = 1, .main = .center }, .{
+                    ui.text(.{}, slot.nameSlice()),
+                    mutedParagraph(ui, remote_runtime.statusCaption(slot)),
+                }),
+                ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, slot.host[0..slot.host_len]),
+            }),
+        });
+        count += 1;
+    }
+    if (count == 0) return ui.el(.stack, .{}, .{});
+    const heading = ui.text(.{ .size = .lg }, "Remote Agents");
+    const hint = mutedParagraph(ui, "Declared in ~/.petdex/remote-agents.json; sync runs at launch");
+    const list = ui.column(.{ .gap = 12 }, @as([]const AppUi.Node, rows[0..count]));
+    return ui.column(.{ .gap = 12 }, .{ heading, hint, list });
+}
+
 pub fn settingsView(ui: *AppUi, model: *const Model, icons: IconAtlas, thumbs: ThumbAtlas) AppUi.Node {
     var rows: [max_catalog]AppUi.Node = undefined;
     var shown: usize = 0;
@@ -269,6 +305,7 @@ pub fn settingsView(ui: *AppUi, model: *const Model, icons: IconAtlas, thumbs: T
         ui.el(.stack, .{ .height = 10 }, .{}),
         ui.text(.{ .size = .lg }, "Agents"),
         agentsSection(ui, model, icons),
+        remoteSection(ui, model),
         ui.el(.stack, .{ .height = 10 }, .{}),
         ui.text(.{ .size = .lg }, "Appearance"),
         ui.el(.panel, .{ .style_tokens = .{ .background = .surface, .radius = .md } }, .{

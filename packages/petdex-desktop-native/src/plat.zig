@@ -165,10 +165,31 @@ pub fn makeDir(path: []const u8) void {
     std.Io.Dir.cwd().createDirPath(scope.io(), path) catch {};
 }
 
+/// Create a directory tree and constrain the leaf directory's POSIX mode.
+/// Windows keeps the inherited ACL, matching writeFileMode's behavior.
+pub fn makeDirMode(path: []const u8, mode: u16) bool {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const io = scope.io();
+    std.Io.Dir.cwd().createDirPath(io, path) catch return false;
+    if (builtin.os.tag == .windows) return true;
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return false;
+    defer dir.close(io);
+    dir.setPermissions(io, @enumFromInt(mode)) catch return false;
+    return true;
+}
+
 pub fn deleteFile(path: []const u8) void {
     var scope = Scope.init();
     defer scope.deinit();
     std.Io.Dir.cwd().deleteFile(scope.io(), path) catch {};
+}
+
+pub fn deleteTree(path: []const u8) bool {
+    var scope = Scope.init();
+    defer scope.deinit();
+    std.Io.Dir.cwd().deleteTree(scope.io(), path) catch return false;
+    return true;
 }
 
 pub fn fileExists(path: []const u8) bool {

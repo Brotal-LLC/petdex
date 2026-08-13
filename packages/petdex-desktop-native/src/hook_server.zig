@@ -525,11 +525,12 @@ fn route(server: *Server, conn: *Conn, method: []const u8, path: []const u8, hea
         const source_tty = plat.safeSourceTty(jsonString(body, "source_tty")) orelse "";
         const source_cwd = plat.safeSourceCwd(jsonString(body, "source_cwd")) orelse "";
         const busy = std.mem.indexOf(u8, body, "\"busy\":true") != null;
-        // No session_id means an agent that predates per-conversation
-        // bubbles (or the MCP path, which has no session): the empty key
-        // is one shared slot, so those callers keep the old behaviour.
-        const session = jsonString(body, "session_id") orelse "";
-        const counter = mailbox.setBubbleWithMetadata(session[0..@min(session.len, 64)], capped, agent[0..@min(agent.len, 24)], title[0..@min(title.len, 96)], origin_app, source_tty, source_cwd, busy);
+        // Canonical conversation metadata wins over raw continuation/session
+        // ids. Arbitrary provider keys are normalized to the mailbox's fixed
+        // 64-byte key instead of being truncated into possible collisions.
+        var session_hash: [64]u8 = undefined;
+        const session = bubbleSessionKey(body, &session_hash);
+        const counter = mailbox.setBubbleWithMetadata(session, capped, agent[0..@min(agent.len, 24)], title[0..@min(title.len, 96)], origin_app, source_tty, source_cwd, busy);
         mirrorBubble(server, capped, counter, title[0..@min(title.len, 96)], agent[0..@min(agent.len, 24)], busy) catch {};
         const out = std.fmt.bufPrint(&scratch, "{{\"ok\":true,\"counter\":{d}}}", .{counter}) catch return;
         return respond(conn, 200, out);
@@ -745,6 +746,46 @@ fn jsonString(body: []const u8, key: []const u8) ?[]const u8 {
     }
     if (!closed) return null;
     return body[val_start..i];
+}
+
+fn normalizeBubbleSession(raw: ?[]const u8, hash_buf: *[64]u8) ?[]const u8 {
+    const value = raw orelse return null;
+    if (value.len == 0) return null;
+    if (value.len <= 64) {
+        var safe = true;
+        for (value) |c| {
+            if (!(std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.')) {
+                safe = false;
+                break;
+            }
+        }
+        if (safe) return value;
+    }
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
+    hash_buf.* = std.fmt.bytesToHex(digest, .lower);
+    return hash_buf;
+}
+
+fn bubbleSessionKey(body: []const u8, hash_buf: *[64]u8) []const u8 {
+    if (normalizeBubbleSession(jsonString(body, "conversation_key"), hash_buf)) |key| return key;
+    if (normalizeBubbleSession(jsonString(body, "petdex_conversation_key"), hash_buf)) |key| return key;
+    if (normalizeBubbleSession(jsonString(body, "session_key"), hash_buf)) |key| return key;
+    return normalizeBubbleSession(jsonString(body, "session_id"), hash_buf) orelse "";
+}
+
+test "bubble session key prefers and normalizes canonical conversations" {
+    var hash: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("stable-key", bubbleSessionKey(
+        "{\"session_id\":\"raw-turn\",\"conversation_key\":\"stable-key\"}",
+        &hash,
+    ));
+    const long = "gateway/conversation/key/whose/provider-spelling-is-longer-than-the-mailbox-slot";
+    var body_buf: [256]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "{{\"conversation_key\":\"{s}\"}}", .{long});
+    const normalized = bubbleSessionKey(body, &hash);
+    try std.testing.expectEqual(@as(usize, 64), normalized.len);
+    try std.testing.expect(!std.mem.eql(u8, normalized, long[0..64]));
 }
 
 test "two sessions hold two bubbles and neither overwrites the other" {
