@@ -16,6 +16,7 @@
 //! once per event, nothing keeps sockets open.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const plat = @import("plat.zig");
 
 /// One connection, plus the Io that owns it. Everything downstream of
@@ -58,6 +59,8 @@ pub const Bubble = struct {
     source_tty_len: usize = 0,
     source_cwd: [512]u8 = @splat(0),
     source_cwd_len: usize = 0,
+    herdr_pane: [64]u8 = @splat(0),
+    herdr_pane_len: usize = 0,
     busy: bool = false,
     counter: u64 = 0,
 
@@ -69,6 +72,9 @@ pub const Bubble = struct {
     }
     pub fn cwdSlice(self: *const Bubble) []const u8 {
         return self.source_cwd[0..self.source_cwd_len];
+    }
+    pub fn herdrPaneSlice(self: *const Bubble) []const u8 {
+        return self.herdr_pane[0..self.herdr_pane_len];
     }
 };
 
@@ -171,10 +177,10 @@ pub const Mailbox = struct {
     /// full the least recently updated entry is evicted: an abandoned
     /// session must not hold a slot against a live one.
     pub fn setBubble(self: *Mailbox, session: []const u8, text: []const u8, agent: []const u8, title: []const u8, busy: bool) u64 {
-        return self.setBubbleWithMetadata(session, text, agent, title, .none, "", "", busy);
+        return self.setBubbleWithMetadata(session, text, agent, title, .none, "", "", "", busy);
     }
 
-    pub fn setBubbleWithMetadata(self: *Mailbox, session: []const u8, text: []const u8, agent: []const u8, title: []const u8, origin_app: plat.OriginApplication, source_tty: []const u8, source_cwd: []const u8, busy: bool) u64 {
+    pub fn setBubbleWithMetadata(self: *Mailbox, session: []const u8, text: []const u8, agent: []const u8, title: []const u8, origin_app: plat.OriginApplication, source_tty: []const u8, source_cwd: []const u8, herdr_pane: []const u8, busy: bool) u64 {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -214,6 +220,9 @@ pub const Mailbox = struct {
         const cwd_n = @min(source_cwd.len, slot.source_cwd.len);
         @memcpy(slot.source_cwd[0..cwd_n], source_cwd[0..cwd_n]);
         slot.source_cwd_len = cwd_n;
+        const pane_n = @min(herdr_pane.len, slot.herdr_pane.len);
+        @memcpy(slot.herdr_pane[0..pane_n], herdr_pane[0..pane_n]);
+        slot.herdr_pane_len = pane_n;
         slot.busy = busy;
 
         self.bubble_counter += 1;
@@ -390,6 +399,14 @@ fn handleConnectionThread(server: *Server, stream: std.Io.net.Stream) void {
     const io = scope.io();
     var conn: Conn = .{ .stream = stream, .io = io };
     handleConnection(server, &conn);
+    stream.shutdown(io, .send) catch {};
+    if (builtin.os.tag == .windows) {
+        var drain: [1]u8 = undefined;
+        while (true) {
+            const message = stream.socket.receive(io, &drain) catch break;
+            if (message.data.len == 0) break;
+        }
+    }
     stream.close(io);
 }
 
@@ -409,7 +426,10 @@ fn handleConnection(server: *Server, conn: *Conn) void {
             respond(conn, 413, "{\"ok\":false,\"error\":\"headers_too_large\"}");
             return;
         }
-        const got = receiveWithTimeout(conn, buf[total..], timeout) catch return;
+        const got = receiveWithTimeout(conn, buf[total..], timeout) catch |err| {
+            std.debug.print("petdex: hook receive failed ({s})\n", .{@errorName(err)});
+            return;
+        };
         if (got == 0) return;
         total += got;
         header_end = if (std.mem.indexOf(u8, buf[0..total], "\r\n\r\n")) |at| at + 4 else null;
@@ -427,7 +447,10 @@ fn handleConnection(server: *Server, conn: *Conn) void {
     }
     const request_len = head_len + content_length;
     while (total < request_len) {
-        const got = receiveWithTimeout(conn, buf[total..request_len], timeout) catch return;
+        const got = receiveWithTimeout(conn, buf[total..request_len], timeout) catch |err| {
+            std.debug.print("petdex: hook body receive failed ({s})\n", .{@errorName(err)});
+            return;
+        };
         if (got == 0) return;
         total += got;
     }
@@ -444,8 +467,15 @@ fn handleConnection(server: *Server, conn: *Conn) void {
 }
 
 fn receiveWithTimeout(conn: *Conn, buffer: []u8, timeout: std.Io.Timeout) !usize {
-    const message = try conn.stream.socket.receiveTimeout(conn.io, buffer, timeout);
-    return message.data.len;
+    if (builtin.os.tag == .windows) {
+        var reader = conn.stream.reader(conn.io, &.{});
+        var data = [_][]u8{buffer};
+        return reader.interface.readVec(&data) catch |err| switch (err) {
+            error.EndOfStream => 0,
+            error.ReadFailed => return reader.err orelse error.Unexpected,
+        };
+    }
+    return (try conn.stream.socket.receiveTimeout(conn.io, buffer, timeout)).data.len;
 }
 
 fn route(server: *Server, conn: *Conn, method: []const u8, path: []const u8, head: []const u8, body: []const u8) void {
@@ -524,13 +554,14 @@ fn route(server: *Server, conn: *Conn, method: []const u8, path: []const u8, hea
         const origin_app = plat.OriginApplication.fromTermProgram(jsonString(body, "source_app"));
         const source_tty = plat.safeSourceTty(jsonString(body, "source_tty")) orelse "";
         const source_cwd = plat.safeSourceCwd(jsonString(body, "source_cwd")) orelse "";
+        const herdr_pane = plat.safeHerdrPaneId(jsonString(body, "herdr_pane_id")) orelse "";
         const busy = std.mem.indexOf(u8, body, "\"busy\":true") != null;
         // Canonical conversation metadata wins over raw continuation/session
         // ids. Arbitrary provider keys are normalized to the mailbox's fixed
         // 64-byte key instead of being truncated into possible collisions.
         var session_hash: [64]u8 = undefined;
         const session = bubbleSessionKey(body, &session_hash);
-        const counter = mailbox.setBubbleWithMetadata(session, capped, agent[0..@min(agent.len, 24)], title[0..@min(title.len, 96)], origin_app, source_tty, source_cwd, busy);
+        const counter = mailbox.setBubbleWithMetadata(session, capped, agent[0..@min(agent.len, 24)], title[0..@min(title.len, 96)], origin_app, source_tty, source_cwd, herdr_pane, busy);
         mirrorBubble(server, capped, counter, title[0..@min(title.len, 96)], agent[0..@min(agent.len, 24)], busy) catch {};
         const out = std.fmt.bufPrint(&scratch, "{{\"ok\":true,\"counter\":{d}}}", .{counter}) catch return;
         return respond(conn, 200, out);
@@ -577,14 +608,10 @@ fn respond(conn: *Conn, status: u16, body: []const u8) void {
         else => "OK",
     };
     const head = std.fmt.bufPrint(&buf, "HTTP/1.1 {d} {s}\r\ncontent-type: application/json\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n", .{ status, reason, body.len }) catch return;
-    writeAll(conn, head);
-    writeAll(conn, body);
-}
-
-fn writeAll(conn: *Conn, bytes: []const u8) void {
     var write_buf: [64]u8 = undefined;
     var writer = conn.stream.writer(conn.io, &write_buf);
-    writer.interface.writeAll(bytes) catch return;
+    writer.interface.writeAll(head) catch return;
+    writer.interface.writeAll(body) catch return;
     writer.interface.flush() catch return;
 }
 
@@ -808,6 +835,15 @@ test "two sessions hold two bubbles and neither overwrites the other" {
     try std.testing.expectEqualStrings("running tests", out[1].text[0..out[1].text_len]);
     try std.testing.expect(out[1].busy);
     try std.testing.expectEqual(beta_counter, out[1].counter);
+}
+
+test "bubble metadata preserves the Herdr pane id" {
+    var mb: Mailbox = .{};
+    _ = mb.setBubbleWithMetadata("herdr:w1:p5", "Needs approval", "cursor", "Fix auth", .terminal, "", "/repo", "w1:p5", false);
+
+    var out: [max_bubbles]Bubble = @splat(.{});
+    try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
+    try std.testing.expectEqualStrings("w1:p5", out[0].herdrPaneSlice());
 }
 
 test "a sessionless agent keeps the single shared slot" {

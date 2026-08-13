@@ -464,6 +464,23 @@ pub fn safeSourceCwd(value: ?[]const u8) ?[]const u8 {
     return cwd;
 }
 
+pub fn safeHerdrPaneId(value: ?[]const u8) ?[]const u8 {
+    const pane = value orelse return null;
+    if (pane.len == 0 or pane.len > 64) return null;
+    for (pane) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and ch != ':' and ch != '_' and ch != '-') return null;
+    }
+    return pane;
+}
+
+test "Herdr pane ids accept only bounded CLI-safe identifiers" {
+    try std.testing.expectEqualStrings("w1:p5", safeHerdrPaneId("w1:p5").?);
+    try std.testing.expect(safeHerdrPaneId("w1:p5;open") == null);
+    try std.testing.expect(safeHerdrPaneId("") == null);
+    var too_long: [65]u8 = @splat('a');
+    try std.testing.expect(safeHerdrPaneId(&too_long) == null);
+}
+
 fn spawnAndWait(argv: []const []const u8) bool {
     var scope = Scope.init();
     defer scope.deinit();
@@ -473,6 +490,50 @@ fn spawnAndWait(argv: []const []const u8) bool {
         .exited => |code| code == 0,
         else => false,
     };
+}
+
+fn runHerdrPluginList(allocator: std.mem.Allocator, binary: []const u8) ?[]u8 {
+    var scope = Scope.init();
+    defer scope.deinit();
+    const result = std.process.run(allocator, scope.io(), .{
+        .argv = &.{ binary, "plugin", "list", "--plugin", "dev.petdex.bridge", "--json" },
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(64 * 1024),
+    }) catch return null;
+    allocator.free(result.stderr);
+    if (result.term != .exited or result.term.exited != 0) {
+        allocator.free(result.stdout);
+        return null;
+    }
+    return result.stdout;
+}
+
+pub fn herdrPluginListAlloc(allocator: std.mem.Allocator, home: []const u8) ?[]u8 {
+    if (runHerdrPluginList(allocator, "herdr")) |source| return source;
+    var local_buf: [768]u8 = undefined;
+    const local = std.fmt.bufPrint(&local_buf, "{s}/.local/bin/herdr", .{home}) catch return null;
+    if (runHerdrPluginList(allocator, local)) |source| return source;
+    if (runHerdrPluginList(allocator, "/opt/homebrew/bin/herdr")) |source| return source;
+    return runHerdrPluginList(allocator, "/usr/local/bin/herdr");
+}
+
+pub fn herdrAvailable(home: []const u8) bool {
+    if (spawnAndWait(&.{ "herdr", "--version" })) return true;
+    var local_buf: [768]u8 = undefined;
+    const local = std.fmt.bufPrint(&local_buf, "{s}/.local/bin/herdr", .{home}) catch return false;
+    if (spawnAndWait(&.{ local, "--version" })) return true;
+    if (spawnAndWait(&.{ "/opt/homebrew/bin/herdr", "--version" })) return true;
+    return spawnAndWait(&.{ "/usr/local/bin/herdr", "--version" });
+}
+
+pub fn activateHerdrPane(home: []const u8, pane_raw: []const u8) bool {
+    const pane = safeHerdrPaneId(pane_raw) orelse return false;
+    if (spawnAndWait(&.{ "herdr", "agent", "focus", pane })) return true;
+    var local_buf: [768]u8 = undefined;
+    const local = std.fmt.bufPrint(&local_buf, "{s}/.local/bin/herdr", .{home}) catch return false;
+    if (spawnAndWait(&.{ local, "agent", "focus", pane })) return true;
+    if (spawnAndWait(&.{ "/opt/homebrew/bin/herdr", "agent", "focus", pane })) return true;
+    return spawnAndWait(&.{ "/usr/local/bin/herdr", "agent", "focus", pane });
 }
 
 pub fn activateOriginApplication(origin: OriginApplication, source_tty: []const u8, source_cwd: []const u8) bool {
