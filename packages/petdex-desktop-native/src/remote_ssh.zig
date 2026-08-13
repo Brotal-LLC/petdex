@@ -38,7 +38,7 @@ pub const stdin_chunk = 3072;
 /// The remote hook script deliberately lands at the SAME path the
 /// desktop's hook binary occupies locally: the merged hook configs
 /// (codex hooks.json, hermes config.yaml) name this path, so one
-/// config works on both sides of the tunnel — a symlinked Zig binary
+/// config works on both sides of the tunnel. A symlinked Zig binary
 /// on the desktop, a POSIX sh script on the remote.
 pub const remote_hook_script = "~/.petdex/bin/petdex-hook";
 pub const remote_codex_watcher = "~/.petdex/bin/petdex-codex-watch";
@@ -258,7 +258,7 @@ pub fn probeArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const R
     return buf[0 .. n + 1];
 }
 
-/// `cat -- '<path>'` on the remote; stdout is collected by the spawn.
+/// `cat` reads the quoted path on the remote; stdout is collected by the spawn.
 pub fn readArgv(buf: *[max_argv][]const u8, scratch: *Scratch, remote: *const Remote, path: []const u8) ?[]const []const u8 {
     const n = appendBase(buf, scratch, remote) orelse return null;
     if (n + 1 > max_argv) return null;

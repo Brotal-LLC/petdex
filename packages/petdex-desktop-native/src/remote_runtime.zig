@@ -185,7 +185,7 @@ pub const Spawn = struct {
 };
 
 /// Fill slots from a loaded config, skipping invalid remotes (logged,
-/// not fatal — one bad entry must not cost the rest). Returns how many
+/// not fatal. One bad entry must not cost the rest). Returns how many
 /// slots went active.
 pub fn fillFromConfig(slots: *[max_remotes]Slot, cfg: *const remote_agents.Config) usize {
     var n: usize = 0;
@@ -235,7 +235,7 @@ pub fn fillFromConfig(slots: *[max_remotes]Slot, cfg: *const remote_agents.Confi
 }
 
 /// Rebuild the config-shaped Remote a slot carries, for the argv
-/// builders. Identity slice points into the slot — valid for the call.
+/// builders. Identity slice points into the slot and is valid for the call.
 pub fn remoteFor(slot: *const Slot) remote_agents.Remote {
     return .{
         .name = slot.nameSlice(),
@@ -425,7 +425,7 @@ fn retry(slot: *Slot, sync_failed: bool) Action {
 }
 
 /// Drive one slot past a finished spawn. `output` is the collected
-/// stdout (valid only during this call — staging copies it to disk
+/// stdout (valid only during this call; staging copies it to disk
 /// before returning).
 pub fn onSpawnExit(slot: *Slot, slot_idx: usize, op: Op, code: i32, output: []const u8, home: []const u8) Action {
     return onSpawnExitDetailed(slot, slot_idx, op, code, output, false, home);

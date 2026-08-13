@@ -7,7 +7,7 @@
 # Contract mirrors the desktop petdex-hook CLI: argv `bubble [phase]
 # [agent]`, hook JSON on stdin, state + bubble POSTs to 127.0.0.1:7777
 # (the ssh -R tunnel back to the desktop), token-gated, and NEVER fails
-# outward — an agent's hook chain must not break because a mascot is
+# outward. An agent's hook chain must not break because a mascot is
 # unreachable.
 
 runtime="$HOME/.petdex/runtime"
