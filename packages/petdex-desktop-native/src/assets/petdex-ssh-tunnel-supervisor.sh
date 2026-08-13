@@ -12,6 +12,24 @@ shift
 "$@" </dev/null &
 tunnel=$!
 
+# Native owns this supervisor process, not the ssh child. During an orderly
+# application shutdown Native terminates the supervisor directly, so reap the
+# child from signal handlers as well as from the parent-liveness loop. Without
+# this trap ssh survives as an orphan and keeps the remote runtime alive.
+cleanup_tunnel() {
+    trap - 0 1 2 15
+    kill "$tunnel" 2>/dev/null || true
+    wait "$tunnel" 2>/dev/null || true
+}
+
+handle_signal() {
+    cleanup_tunnel
+    exit 143
+}
+
+trap cleanup_tunnel 0
+trap handle_signal 1 2 15
+
 parent_alive() {
     kill -0 "$parent" 2>/dev/null || return 1
     # kill -0 still succeeds for an unreaped zombie (notably when a launcher
@@ -30,5 +48,7 @@ if ! parent_alive; then
     kill "$tunnel" 2>/dev/null || true
 fi
 
-wait "$tunnel"
-exit $?
+status=0
+wait "$tunnel" || status=$?
+trap - 0 1 2 15
+exit "$status"
