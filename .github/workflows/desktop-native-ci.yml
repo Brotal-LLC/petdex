@@ -165,6 +165,7 @@ jobs:
           python3 tests/remote_watchers_test.py
           sh -n src/assets/petdex-remote-hook.sh
           sh tests/remote_hook_test.sh
+          sh tests/tunnel_supervisor_test.sh
 
       # Compiling proves nothing about whether the app draws: the hook
       # server regression that shipped in this branch compiled fine on
@@ -236,6 +237,7 @@ jobs:
           echo "=== app log (full) ==="
           cat run.log
           kill "$APP_PID" || true
+          wait "$APP_PID" 2>/dev/null || true
           sleep 2
           echo "=== retry with the cairo renderer ==="
           GSK_RENDERER=cairo PETDEX_PET=ci-pet ./zig-out/bin/petdex-desktop-native > cairo.log 2>&1 &
@@ -705,7 +707,10 @@ jobs:
             sleep 1
           done
           "${REMOTE[@]}" 'test ! -e ~/.petdex/runtime/update-token && test ! -e ~/.petdex/runtime/codex-watch.pid && test ! -e ~/.petdex/runtime/hermes-watch.pid' || {
-            echo "FAIL: tunnel shutdown left a token or watcher alive"; exit 1; }
+            echo "FAIL: tunnel shutdown left a token or watcher alive"
+            "${REMOTE[@]}" 'ls -la ~/.petdex/runtime; for p in ~/.petdex/runtime/*-watch.pid; do test -e "$p" || continue; printf "%s: " "$p"; cat "$p"; done'
+            exit 1
+          }
           APP_PID=
 
       - name: Upload the screenshot

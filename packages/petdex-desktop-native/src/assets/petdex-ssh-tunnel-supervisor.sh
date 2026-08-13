@@ -12,11 +12,21 @@ shift
 "$@" </dev/null &
 tunnel=$!
 
-while kill -0 "$parent" 2>/dev/null && kill -0 "$tunnel" 2>/dev/null; do
+parent_alive() {
+    kill -0 "$parent" 2>/dev/null || return 1
+    # kill -0 still succeeds for an unreaped zombie (notably when a launcher
+    # shell has not waited yet). Treat Z as exited so the SSH child cannot be
+    # stranded until that launcher itself terminates.
+    state=$(ps -o stat= -p "$parent" 2>/dev/null) || return 1
+    case "$state" in *Z*) return 1 ;; esac
+    return 0
+}
+
+while parent_alive && kill -0 "$tunnel" 2>/dev/null; do
     sleep 1
 done
 
-if ! kill -0 "$parent" 2>/dev/null; then
+if ! parent_alive; then
     kill "$tunnel" 2>/dev/null || true
 fi
 
