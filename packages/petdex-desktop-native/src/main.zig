@@ -19,6 +19,7 @@ extern "c" fn system(command: [*:0]const u8) c_int;
 const native_sdk = @import("native_sdk");
 const hook_server = @import("hook_server.zig");
 const hook_runner = @import("hook_runner.zig");
+const session_reconcile = @import("session_reconcile.zig");
 const agent_hooks = @import("agent_hooks.zig");
 const dsh_integration = @import("dsh_integration.zig");
 const plat = @import("plat.zig");
@@ -2141,6 +2142,9 @@ pub fn boot(model: *Model, fx: *Effects) void {
         }
         hook_server.start(boot_allocator, home) catch |err| {
             std.debug.print("petdex: hook server failed to start ({s})\n", .{@errorName(err)});
+        };
+        session_reconcile.start(boot_allocator, home) catch |err| {
+            std.debug.print("petdex: local session recovery failed to start ({s})\n", .{@errorName(err)});
         };
         startRemotes(model, fx);
     }
@@ -5036,6 +5040,16 @@ pub fn main(init: std.process.Init) !void {
     agent_hooks.env_qoder_cn_cli_home = init.environ_map.get("QODERCN_CLI_HOME");
     agent_hooks.env_hermes_home = init.environ_map.get("HERMES_HOME");
     dsh_integration.env_dsh_home = init.environ_map.get("DSH_HOME");
+    session_reconcile.env_claude_config_dir = init.environ_map.get("CLAUDE_CONFIG_DIR");
+    session_reconcile.env_kimi_code_home = init.environ_map.get("KIMI_CODE_HOME");
+    session_reconcile.env_kimi_share_dir = init.environ_map.get("KIMI_SHARE_DIR");
+    session_reconcile.env_pi_coding_agent_dir = init.environ_map.get("PI_CODING_AGENT_DIR");
+    session_reconcile.env_xdg_data_home = init.environ_map.get("XDG_DATA_HOME");
+    session_reconcile.env_qoder_config_dir = init.environ_map.get("QODER_CONFIG_DIR");
+    session_reconcile.env_qoder_cn_config_dir = init.environ_map.get("QODERCN_CONFIG_DIR");
+    session_reconcile.env_qoder_cli_home = init.environ_map.get("QODER_CLI_HOME");
+    session_reconcile.env_qoder_cn_cli_home = init.environ_map.get("QODERCN_CLI_HOME");
+    session_reconcile.env_hermes_home = init.environ_map.get("HERMES_HOME");
     // Hook hot path: `<binary> bubble <phase> [agent]` runs the
     // in-binary runner and exits before any UI machinery spins up.
     // initAllocator, not init: on Windows the command line arrives as
@@ -5467,6 +5481,7 @@ test {
     _ = agent_hooks;
     _ = hook_runner;
     _ = hook_server;
+    _ = session_reconcile;
     _ = installer;
     _ = plat;
     _ = remote_agents;
