@@ -22,7 +22,226 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const macos_fsevents = @import("macos_fsevents.zig");
 
+pub const DirectoryWatchSignal = enum { none, dirty, overflow };
+
+/// A bounded, coalescing directory-change signal. Native backends report only
+/// that reconciliation work is needed; the reconciliation layer remains the
+/// source of truth and performs bounded scans. Queue overflow deliberately
+/// collapses to one stronger signal instead of retaining unbounded paths.
+pub const DirectoryWatch = struct {
+    const max_path = 1024;
+    const linux_max_dirs = 512;
+    path: [max_path]u8 = @splat(0),
+    path_len: usize = 0,
+    dirty: std.atomic.Value(bool) = .init(false),
+    overflow: std.atomic.Value(bool) = .init(false),
+    cursor: std.atomic.Value(u64) = .init(0),
+    failures: std.atomic.Value(u8) = .init(0),
+
+    pub fn init(path: []const u8) ?DirectoryWatch {
+        if (path.len == 0 or path.len > max_path or !std.unicode.utf8ValidateSlice(path)) return null;
+        var result: DirectoryWatch = .{};
+        result.path_len = path.len;
+        @memcpy(result.path[0..path.len], path);
+        return result;
+    }
+
+    pub fn start(self: *DirectoryWatch) bool {
+        const thread = std.Thread.spawn(.{}, watchThread, .{self}) catch return false;
+        thread.detach();
+        return true;
+    }
+
+    pub fn root(self: *const DirectoryWatch) []const u8 {
+        return self.path[0..self.path_len];
+    }
+
+    pub fn take(self: *DirectoryWatch) DirectoryWatchSignal {
+        if (self.overflow.swap(false, .acq_rel)) {
+            _ = self.dirty.swap(false, .acq_rel);
+            return .overflow;
+        }
+        return if (self.dirty.swap(false, .acq_rel)) .dirty else .none;
+    }
+
+    fn publish(self: *DirectoryWatch, signal: DirectoryWatchSignal) void {
+        switch (signal) {
+            .none => return,
+            .dirty => self.dirty.store(true, .release),
+            .overflow => self.overflow.store(true, .release),
+        }
+        _ = self.cursor.fetchAdd(1, .acq_rel);
+    }
+
+    fn watchThread(self: *DirectoryWatch) void {
+        var delay_ms: i64 = 250;
+        while (true) {
+            self.backendLoop() catch {
+                const prior = self.failures.load(.acquire);
+                const count = prior +| 1;
+                self.failures.store(count, .release);
+                delay_ms = directoryWatchBackoff(count);
+                self.publish(.overflow);
+                var scope = Scope.init();
+                std.Io.sleep(scope.io(), std.Io.Duration.fromMilliseconds(delay_ms), .awake) catch {};
+                scope.deinit();
+                continue;
+            };
+            delay_ms = 250;
+        }
+    }
+
+    fn backendLoop(self: *DirectoryWatch) !void {
+        return switch (builtin.os.tag) {
+            .windows => self.windowsLoop(),
+            .linux => self.linuxLoop(),
+            .macos => self.fseventsLoop(),
+            else => error.UnsupportedDirectoryWatch,
+        };
+    }
+
+    fn windowsLoop(self: *DirectoryWatch) !void {
+        const windows = std.os.windows;
+        const path_w = try std.unicode.utf8ToUtf16LeAllocZ(std.heap.page_allocator, self.path[0..self.path_len]);
+        defer std.heap.page_allocator.free(path_w);
+        const handle = CreateFileW(path_w.ptr, 0x0001, 0x00000001 | 0x00000002 | 0x00000004, null, 3, 0x02000000, null);
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.OpenDirectoryWatchFailed;
+        defer windows.CloseHandle(handle);
+        var buffer: [64 * 1024]u8 align(@alignOf(u32)) = undefined;
+        while (true) {
+            var bytes: windows.DWORD = 0;
+            if (ReadDirectoryChangesW(handle, &buffer, buffer.len, windows.BOOL.TRUE, 0x00000001 | 0x00000002 | 0x00000008 | 0x00000010 | 0x00000020, &bytes, null, null) == .FALSE) return error.DirectoryWatchReadFailed;
+            self.failures.store(0, .release);
+            self.publish(if (bytes == 0) .overflow else .dirty);
+        }
+    }
+
+    fn linuxAddTree(self: *DirectoryWatch, io: std.Io, fd: std.posix.fd_t, path: []const u8, depth: u8, count: *usize) void {
+        if (depth > 12 or count.* >= linux_max_dirs) {
+            self.publish(.overflow);
+            return;
+        }
+        const path_z = std.heap.page_allocator.dupeZ(u8, path) catch {
+            self.publish(.overflow);
+            return;
+        };
+        defer std.heap.page_allocator.free(path_z);
+        const mask = std.os.linux.IN.CLOSE_WRITE | std.os.linux.IN.CREATE | std.os.linux.IN.DELETE |
+            std.os.linux.IN.MOVED_FROM | std.os.linux.IN.MOVED_TO | std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF;
+        const add_result = std.os.linux.inotify_add_watch(fd, path_z, mask);
+        if (std.posix.errno(add_result) != .SUCCESS) {
+            self.publish(.overflow);
+            return;
+        }
+        count.* += 1;
+        var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch {
+            self.publish(.overflow);
+            return;
+        };
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (it.next(io) catch null) |entry| {
+            if (entry.kind != .directory) continue;
+            if (count.* >= linux_max_dirs) {
+                self.publish(.overflow);
+                continue;
+            }
+            const child = std.fs.path.join(std.heap.page_allocator, &.{ path, entry.name }) catch {
+                self.publish(.overflow);
+                continue;
+            };
+            defer std.heap.page_allocator.free(child);
+            self.linuxAddTree(io, fd, child, depth + 1, count);
+        }
+    }
+
+    fn linuxLoop(self: *DirectoryWatch) !void {
+        var scope = Scope.init();
+        defer scope.deinit();
+        const io = scope.io();
+        const init_result = std.os.linux.inotify_init1(std.os.linux.IN.CLOEXEC);
+        if (std.posix.errno(init_result) != .SUCCESS) return error.InotifyInitFailed;
+        const fd: std.posix.fd_t = @intCast(init_result);
+        defer std.Io.Threaded.closeFd(fd);
+        var count: usize = 0;
+        self.linuxAddTree(io, fd, self.path[0..self.path_len], 0, &count);
+        if (count == 0) return error.InotifyWatchFailed;
+        var buffer: [16 * 1024]u8 align(@alignOf(std.os.linux.inotify_event)) = undefined;
+        while (true) {
+            const used = try std.posix.read(fd, &buffer);
+            var offset: usize = 0;
+            var overflowed = false;
+            while (offset + @sizeOf(std.os.linux.inotify_event) <= used) {
+                const event: *align(1) const std.os.linux.inotify_event = @ptrCast(buffer[offset..].ptr);
+                if (event.mask & std.os.linux.IN.Q_OVERFLOW != 0) overflowed = true;
+                const next = @sizeOf(std.os.linux.inotify_event) + event.len;
+                if (next == 0 or offset + next > used) break;
+                offset += next;
+            }
+            self.failures.store(0, .release);
+            self.publish(if (overflowed) .overflow else .dirty);
+            count = 0;
+            self.linuxAddTree(io, fd, self.path[0..self.path_len], 0, &count);
+        }
+    }
+
+    fn fseventsPublish(raw: *anyopaque, signal: macos_fsevents.Signal) void {
+        const self: *DirectoryWatch = @ptrCast(@alignCast(raw));
+        self.failures.store(0, .release);
+        self.publish(switch (signal) {
+            .dirty => .dirty,
+            .overflow => .overflow,
+        });
+    }
+
+    fn fseventsLoop(self: *DirectoryWatch) !void {
+        return macos_fsevents.run(self.path[0..self.path_len], .{
+            .context = self,
+            .publish = fseventsPublish,
+        });
+    }
+};
+
+fn directoryWatchBackoff(failures: u8) i64 {
+    const shift: u6 = @intCast(@min(failures, 7));
+    return @min(@as(i64, 30_000), @as(i64, 250) << shift);
+}
+
+test "directory watch signals coalesce overflow and bound retry backoff" {
+    var watch = DirectoryWatch.init("safe-root").?;
+    watch.publish(.dirty);
+    watch.publish(.dirty);
+    try std.testing.expectEqual(DirectoryWatchSignal.dirty, watch.take());
+    try std.testing.expectEqual(DirectoryWatchSignal.none, watch.take());
+    watch.publish(.dirty);
+    watch.publish(.overflow);
+    try std.testing.expectEqual(DirectoryWatchSignal.overflow, watch.take());
+    try std.testing.expectEqual(DirectoryWatchSignal.none, watch.take());
+    try std.testing.expectEqual(@as(i64, 500), directoryWatchBackoff(1));
+    try std.testing.expectEqual(@as(i64, 30_000), directoryWatchBackoff(20));
+}
+
+extern "kernel32" fn CreateFileW(
+    name: [*:0]const u16,
+    access: std.os.windows.DWORD,
+    share: std.os.windows.DWORD,
+    security: ?*anyopaque,
+    creation: std.os.windows.DWORD,
+    flags: std.os.windows.DWORD,
+    template: ?std.os.windows.HANDLE,
+) callconv(.winapi) std.os.windows.HANDLE;
+extern "kernel32" fn ReadDirectoryChangesW(
+    directory: std.os.windows.HANDLE,
+    buffer: *anyopaque,
+    buffer_len: std.os.windows.DWORD,
+    subtree: std.os.windows.BOOL,
+    filter: std.os.windows.DWORD,
+    bytes: *std.os.windows.DWORD,
+    overlapped: ?*anyopaque,
+    completion: ?*anyopaque,
+) callconv(.winapi) std.os.windows.BOOL;
 /// One Io per calling thread. Cheap to build (no worker threads spin
 /// up until an async call asks for them) and never shared, so the
 /// blocking helpers below are safe from any thread.
