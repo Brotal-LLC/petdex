@@ -57,7 +57,7 @@ session contract.
 
 For the pinned desktop build, set `NATIVE_CLI` and `NATIVE_SDK_PATH` to the
 CLI and SDK checkout used by the matching release workflow. The build scripts
-apply the Petdex-owned macOS, Linux, and shared runtime patches before compiling;
+apply the Petdex-owned macOS, Linux, Windows, and shared runtime patches before compiling;
 they fail if the SDK source no longer matches the pinned patches.
 
 ## Linux desktop smoke
