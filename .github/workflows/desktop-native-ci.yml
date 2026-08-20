@@ -271,7 +271,7 @@ jobs:
           sleep 10
           kill -0 "$APP_PID" || { echo "app died"; cat run.log; exit 1; }
           for _ in $(seq 1 60); do
-            test -s ~/.petdex/runtime/update-token && break
+            test -s "$HOME/.petdex/runtime/update-token" && break
             kill -0 "$APP_PID" || { echo "app died"; cat run.log; exit 1; }
             sleep 1
           done
@@ -805,6 +805,158 @@ jobs:
             exit 1
           }
           APP_PID=
+
+      # The legs above prove the app launches, paints, and answers the
+      # hook server. None of them sends the pet a single click, which is
+      # the gap the header note calls "compile-and-launch verified only"
+      # and exactly where #703 hid: on Windows the pet renders correctly
+      # and ignores every mouse event, because the platform registers no
+      # move_window_fn and all pet input is routed through it.
+      #
+      # cuse drives real OS input (XTEST on X11, SendInput on Win32) and
+      # diffs the frames, so a pet that stops reacting fails here rather
+      # than reaching a user. The assertion is deliberately the CHANGED
+      # frame: a tap flips the pet between jumping and waving, and only
+      # a click that actually reached the window can produce that.
+      # Not blocking yet: cuse cannot enumerate windows on a bare X11
+      # display (crafter-agents/cuse#65), so the Linux leg cannot aim a
+      # click even though xwininfo sees the window in the same job. The
+      # Windows leg is blocked on its own pets failing to decode on the
+      # runner. Both are tracked; flip continue-on-error off once the
+      # Linux side goes green, so the check starts gating.
+      - name: Click the pet and prove it reacts
+        if: matrix.platform != 'macos'
+        continue-on-error: true
+        shell: bash
+        working-directory: packages/petdex-desktop-native
+        env:
+          CUSE_VERSION: v0.1.0
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.platform }}" in
+            linux)
+              asset=cuse-linux-x64
+              bin=./cuse
+              # cuse reads the screen through xwd, which is not on the
+              # runner by default.
+              sudo apt-get install -y x11-apps xvfb
+              export DISPLAY=:99
+              # :99 may still be up from the hook-server step. Starting a
+              # second server on a live display is a fatal error, so only
+              # start one when nothing answers.
+              if ! xdpyinfo -display :99 >/dev/null 2>&1; then
+                Xvfb :99 -screen 0 1280x800x24 &
+                for _ in $(seq 1 30); do
+                  xdpyinfo -display :99 >/dev/null 2>&1 && break
+                  sleep 1
+                done
+              fi
+              xdpyinfo -display :99 >/dev/null 2>&1 || { echo "no display on :99"; exit 1; }
+              ;;
+            windows)
+              asset=cuse-windows-x64.exe
+              # Git Bash will not execute an extensionless binary here.
+              bin=./cuse.exe
+              # git-bash's ~ is not $USERPROFILE on this runner, which is
+              # the same trap the "Install a pet (Windows)" step documents:
+              # the app reads its runtime out of USERPROFILE, so pointing
+              # HOME anywhere else looks like "the app never started".
+              export HOME="$USERPROFILE"
+              ;;
+          esac
+
+          base="https://github.com/crafter-agents/cuse/releases/download/${CUSE_VERSION}"
+          curl -fsSLo "${bin}" "${base}/${asset}"
+          curl -fsSLo SHA256SUMS "${base}/SHA256SUMS"
+          # A downloaded binary that drives OS input deserves the check
+          # the release already publishes.
+          awk -v a="$asset" -v b="${bin#./}" '$2 == a { print $1 "  " b }' SHA256SUMS > cuse.sha256
+          sha256sum -c cuse.sha256
+          chmod +x "${bin}"
+          "${bin}" os --json
+
+          # Earlier steps leave a token behind, so waiting on the file
+          # would return instantly and prove nothing. Clear it first and
+          # wait for THIS run to write a fresh one.
+          rm -f "$HOME/.petdex/runtime/update-token"
+          # Under Xvfb GTK's default GL renderer has no driver, which is
+          # why the hook-server step falls back to cairo. Without this the
+          # app runs and paints nothing.
+          if [ "${{ matrix.platform }}" = linux ]; then
+            export GSK_RENDERER=cairo
+          fi
+          PETDEX_PET=ci-pet ./zig-out/bin/petdex-desktop-native > input.log 2>&1 &
+          APP_PID=$!
+          for _ in $(seq 1 60); do
+            test -s "$HOME/.petdex/runtime/update-token" && break
+            kill -0 "$APP_PID" 2>/dev/null || { echo "app died"; cat input.log; exit 1; }
+            sleep 1
+          done
+          test -s "$HOME/.petdex/runtime/update-token" || {
+            echo "app never came up"; cat input.log; exit 1; }
+          "${bin}" settle 8 500 --json || true
+
+          # The window title differs by platform: Win32 shows the app
+          # title from src/main.zig:59, while GTK reports the binary name.
+          # Match either rather than assuming one.
+          case "${{ matrix.platform }}" in
+            linux) title=petdex-desktop-native ;;
+            windows) title=Petdex ;;
+          esac
+
+          # A window has to exist before a click can land on it. Without
+          # this the failure reads as "no window matching ...", which
+          # points at the click rather than at the app.
+          for _ in $(seq 1 30); do
+            "${bin}" windows --json | grep -q "$title" && break
+            sleep 1
+          done
+          "${bin}" windows --json > windows.json
+          cat windows.json
+          grep -q "$title" windows.json || {
+            echo "FAIL: the app is running but never opened a titled window"
+            cat input.log
+            exit 1
+          }
+
+          "${bin}" capture before.png --json
+
+          # Two taps. One frame change could be an idle animation landing
+          # elsewhere by chance; the pet alternates jumping and waving on
+          # each pat, so a second tap has to move it again.
+          # The window title is "Petdex" (src/main.zig:59). cuse errors
+          # with the list of visible windows if it cannot find it, which
+          # is the diagnostic we want when this fails.
+          "${bin}" click --window="$title" --json
+          sleep 1
+          "${bin}" capture after1.png --json
+          "${bin}" click --window="$title" --json
+          sleep 1
+          "${bin}" capture after2.png --json
+
+          # Read the verdict field rather than grepping the line: SAME and
+          # CHANGED both contain "CHANGE" as a substring in other wordings.
+          verdict() { "${bin}" diff "$1" "$2" --json | bun -e \
+            'const r=JSON.parse(await Bun.stdin.text()); console.log(r.data.verdict, r.data.percent+"%")'; }
+
+          first=$(verdict before.png after1.png)
+          second=$(verdict after1.png after2.png)
+          echo "first tap:  $first"
+          echo "second tap: $second"
+
+          case "$first" in
+            CHANGED*) ;;
+            *) echo "FAIL: the pet did not react to a click (see #703)"
+               cat input.log; exit 1 ;;
+          esac
+          case "$second" in
+            CHANGED*) ;;
+            *) echo "FAIL: the pet reacted once and then stopped alternating"
+               cat input.log; exit 1 ;;
+          esac
+
+          kill "$APP_PID" 2>/dev/null || true
 
       - name: Upload the screenshot
         if: always() && matrix.platform != 'macos'
