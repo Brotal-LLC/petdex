@@ -39,10 +39,14 @@ on:
   push:
     paths:
       - "packages/petdex-desktop-native/**"
+      - "patches/native-sdk-*.patch"
+      - "scripts/patch-native-sdk.sh"
       - ".github/workflows/desktop-native-ci.yml"
   pull_request:
     paths:
       - "packages/petdex-desktop-native/**"
+      - "patches/native-sdk-*.patch"
+      - "scripts/patch-native-sdk.sh"
       - ".github/workflows/desktop-native-ci.yml"
   workflow_dispatch:
 
@@ -229,9 +233,9 @@ jobs:
         run: |
           $dir = "$env:USERPROFILE\.petdex\pets\ci-pet"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $meta = Invoke-RestMethod -Uri "https://petdex.dev/api/install-pet/boba"
-          Invoke-WebRequest -Uri $meta.pet.spritesheetUrl -OutFile "$dir\spritesheet.webp"
-          '{"id":"ci-pet","displayName":"CI Pet","description":"ci","spritesheetPath":"spritesheet.webp"}' |
+          $meta = Invoke-RestMethod -Uri "https://petdex.dev/api/install-pet/gf-sd"
+          Invoke-WebRequest -Uri $meta.pet.spritesheetUrl -OutFile "$dir\spritesheet.png"
+          '{"id":"ci-pet","displayName":"CI Pet","description":"ci","spritesheetPath":"spritesheet.png"}' |
             Set-Content -Path "$dir\pet.json" -NoNewline
           Get-ChildItem $dir | Select-Object Name, Length | Format-Table -AutoSize
 
@@ -818,26 +822,22 @@ jobs:
       # than reaching a user. The assertion is deliberately the CHANGED
       # frame: a tap flips the pet between jumping and waving, and only
       # a click that actually reached the window can produce that.
-      # Not blocking yet: cuse cannot enumerate windows on a bare X11
-      # display (crafter-agents/cuse#65), so the Linux leg cannot aim a
-      # click even though xwininfo sees the window in the same job. The
-      # Windows leg is blocked on its own pets failing to decode on the
-      # runner. Both are tracked; flip continue-on-error off once the
-      # Linux side goes green, so the check starts gating.
+      # Not blocking on Linux yet: cuse cannot enumerate windows on a
+      # bare X11 display (crafter-agents/cuse#65), so that leg cannot aim
+      # a click even though xwininfo sees the window in the same job.
       - name: Click the pet and prove it reacts
         if: matrix.platform != 'macos'
-        continue-on-error: true
+        continue-on-error: ${{ matrix.platform == 'linux' }}
         shell: bash
         working-directory: packages/petdex-desktop-native
         env:
-          CUSE_VERSION: v0.1.0
+          CUSE_REF: fa387098481758959561d89b57b6428a27497ce3
         run: |
           set -euo pipefail
 
           case "${{ matrix.platform }}" in
             linux)
-              asset=cuse-linux-x64
-              bin=./cuse
+              bin=./cuse-src/dist/cuse
               # cuse reads the screen through xwd, which is not on the
               # runner by default.
               sudo apt-get install -y x11-apps xvfb
@@ -855,9 +855,7 @@ jobs:
               xdpyinfo -display :99 >/dev/null 2>&1 || { echo "no display on :99"; exit 1; }
               ;;
             windows)
-              asset=cuse-windows-x64.exe
-              # Git Bash will not execute an extensionless binary here.
-              bin=./cuse.exe
+              bin=./cuse-src/dist/cuse.exe
               # git-bash's ~ is not $USERPROFILE on this runner, which is
               # the same trap the "Install a pet (Windows)" step documents:
               # the app reads its runtime out of USERPROFILE, so pointing
@@ -866,14 +864,10 @@ jobs:
               ;;
           esac
 
-          base="https://github.com/crafter-agents/cuse/releases/download/${CUSE_VERSION}"
-          curl -fsSLo "${bin}" "${base}/${asset}"
-          curl -fsSLo SHA256SUMS "${base}/SHA256SUMS"
-          # A downloaded binary that drives OS input deserves the check
-          # the release already publishes.
-          awk -v a="$asset" -v b="${bin#./}" '$2 == a { print $1 "  " b }' SHA256SUMS > cuse.sha256
-          sha256sum -c cuse.sha256
-          chmod +x "${bin}"
+          git clone https://github.com/crafter-agents/cuse.git cuse-src
+          git -C cuse-src checkout --detach "$CUSE_REF"
+          test "$(git -C cuse-src rev-parse HEAD)" = "$CUSE_REF"
+          (cd cuse-src && bun install --frozen-lockfile && bun run build)
           "${bin}" os --json
 
           # Earlier steps leave a token behind, so waiting on the file
@@ -886,7 +880,10 @@ jobs:
           if [ "${{ matrix.platform }}" = linux ]; then
             export GSK_RENDERER=cairo
           fi
-          PETDEX_PET=ci-pet ./zig-out/bin/petdex-desktop-native > input.log 2>&1 &
+          mkdir -p "$HOME/.petdex"
+          printf '{"active_pet":"ci-pet","scale":0.7,"agents_prompted":true}' \
+            > "$HOME/.petdex/desktop-native-settings.json"
+          ./zig-out/bin/petdex-desktop-native > input.log 2>&1 &
           APP_PID=$!
           for _ in $(seq 1 60); do
             test -s "$HOME/.petdex/runtime/update-token" && break
@@ -897,51 +894,46 @@ jobs:
             echo "app never came up"; cat input.log; exit 1; }
           "${bin}" settle 8 500 --json || true
 
-          # The window title differs by platform: Win32 shows the app
-          # title from src/main.zig:59, while GTK reports the binary name.
-          # Match either rather than assuming one.
           case "${{ matrix.platform }}" in
-            linux) title=petdex-desktop-native ;;
-            windows) title=Petdex ;;
+            linux)
+              title=petdex-desktop-native
+              for _ in $(seq 1 30); do
+                "${bin}" windows --json | grep -q "$title" && break
+                sleep 1
+              done
+              "${bin}" windows --json > windows.json
+              cat windows.json
+              grep -q "$title" windows.json || {
+                echo "FAIL: the app is running but never opened a titled window"
+                cat input.log
+                exit 1
+              }
+              target=(--window="$title")
+              ;;
+            windows)
+              target=(112 210)
+              ;;
           esac
-
-          # A window has to exist before a click can land on it. Without
-          # this the failure reads as "no window matching ...", which
-          # points at the click rather than at the app.
-          for _ in $(seq 1 30); do
-            "${bin}" windows --json | grep -q "$title" && break
-            sleep 1
-          done
-          "${bin}" windows --json > windows.json
-          cat windows.json
-          grep -q "$title" windows.json || {
-            echo "FAIL: the app is running but never opened a titled window"
-            cat input.log
-            exit 1
-          }
 
           "${bin}" capture before.png --json
 
           # Two taps. One frame change could be an idle animation landing
           # elsewhere by chance; the pet alternates jumping and waving on
           # each pat, so a second tap has to move it again.
-          # The window title is "Petdex" (src/main.zig:59). cuse errors
-          # with the list of visible windows if it cannot find it, which
-          # is the diagnostic we want when this fails.
-          "${bin}" click --window="$title" --json
-          sleep 1
+          "${bin}" click "${target[@]}" --json
           "${bin}" capture after1.png --json
-          "${bin}" click --window="$title" --json
-          sleep 1
+          "${bin}" settle 8 250 --json || true
+          "${bin}" capture before2.png --json
+          "${bin}" click "${target[@]}" --json
           "${bin}" capture after2.png --json
 
           # Read the verdict field rather than grepping the line: SAME and
           # CHANGED both contain "CHANGE" as a substring in other wordings.
-          verdict() { "${bin}" diff "$1" "$2" --json | bun -e \
+          verdict() { "${bin}" diff "$1" "$2" --same-under=0.25 --json | bun -e \
             'const r=JSON.parse(await Bun.stdin.text()); console.log(r.data.verdict, r.data.percent+"%")'; }
 
           first=$(verdict before.png after1.png)
-          second=$(verdict after1.png after2.png)
+          second=$(verdict before2.png after2.png)
           echo "first tap:  $first"
           echo "second tap: $second"
 
@@ -956,6 +948,39 @@ jobs:
                cat input.log; exit 1 ;;
           esac
 
+          if [ "${{ matrix.platform }}" = windows ]; then
+            "${bin}" capture menu-before.png --json
+            "${bin}" click 112 210 --button=right --json
+            sleep 1
+            "${bin}" capture menu-open.png --json
+            opened=$(verdict menu-before.png menu-open.png)
+            echo "context menu open: $opened"
+            case "$opened" in
+              CHANGED*) ;;
+              *) echo "FAIL: the context menu did not appear"; exit 1 ;;
+            esac
+            "${bin}" key Escape --json
+            sleep 1
+            "${bin}" capture menu-closed.png --json
+            closed=$(verdict menu-open.png menu-closed.png)
+            echo "context menu close: $closed"
+            case "$closed" in
+              CHANGED*) ;;
+              *) echo "FAIL: the context menu did not close"; exit 1 ;;
+            esac
+
+            "${bin}" capture drag-before.png --json
+            "${bin}" drag 112 210 192 250 --json
+            sleep 1
+            "${bin}" capture drag-after.png --json
+            moved=$(verdict drag-before.png drag-after.png)
+            echo "drag: $moved"
+            case "$moved" in
+              CHANGED*) ;;
+              *) echo "FAIL: the pet did not move after a real drag"; exit 1 ;;
+            esac
+          fi
+
           kill "$APP_PID" 2>/dev/null || true
 
       - name: Upload the screenshot
@@ -967,6 +992,15 @@ jobs:
             /tmp/linux-screen.png
             /tmp/linux-screen-cairo.png
             /tmp/linux-screen-deeplink.png
+            packages/petdex-desktop-native/before.png
+            packages/petdex-desktop-native/after1.png
+            packages/petdex-desktop-native/before2.png
+            packages/petdex-desktop-native/after2.png
+            packages/petdex-desktop-native/menu-before.png
+            packages/petdex-desktop-native/menu-open.png
+            packages/petdex-desktop-native/menu-closed.png
+            packages/petdex-desktop-native/drag-before.png
+            packages/petdex-desktop-native/drag-after.png
             ${{ runner.temp }}/windows-screen.png
             ${{ runner.temp }}/windows-screen-deeplink.png
           if-no-files-found: warn
