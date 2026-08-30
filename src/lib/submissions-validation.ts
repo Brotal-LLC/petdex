@@ -17,7 +17,36 @@ export type SubmissionInput = {
   spritesheetWidth: number;
   spritesheetHeight: number;
   spriteVersionNumber?: 1 | 2;
+  license?: PetLicenseChoice;
 };
+
+// Licenses a creator may declare for their pet artwork. The repo's code is
+// MIT, but artwork belongs to whoever drew it, so the grant travels per pet.
+// 'unspecified' is not offered at submit time — it only describes pets that
+// predate this field, where the creator never declared anything.
+export const PET_LICENSE_CHOICES = [
+  "cc0",
+  "cc-by",
+  "cc-by-sa",
+  "cc-by-nc",
+  "all-rights-reserved",
+] as const;
+
+export type PetLicenseChoice = (typeof PET_LICENSE_CHOICES)[number];
+
+/** Licenses that let someone ship the pet in a commercial product. */
+export const COMMERCIAL_PET_LICENSES: ReadonlyArray<PetLicenseChoice> = [
+  "cc0",
+  "cc-by",
+  "cc-by-sa",
+] as const;
+
+export function isPetLicenseChoice(v: unknown): v is PetLicenseChoice {
+  return (
+    typeof v === "string" &&
+    (PET_LICENSE_CHOICES as ReadonlyArray<string>).includes(v)
+  );
+}
 
 export type SubmissionResult =
   | { ok: true; id: string; slug: string }
@@ -60,6 +89,23 @@ export function validateSubmission(
       };
     }
   }
+  // Transition window: a CLI published before the license field existed
+  // sends no license at all, and rejecting those would break `petdex
+  // submit` for everyone who has not upgraded yet. Absent is accepted and
+  // stored as 'unspecified'. A license that IS sent must still be valid —
+  // silently discarding a typo would record "no grant" for a creator who
+  // believed they gave one. Tighten to required once the new CLI is out.
+  if (body.license !== undefined && !isPetLicenseChoice(body.license)) {
+    return {
+      ok: false,
+      status: 400,
+      error: "invalid_license",
+      field: "license",
+      message: `license must be one of: ${PET_LICENSE_CHOICES.join(", ")}`,
+      got: body.license,
+    };
+  }
+
   const width = body.spritesheetWidth;
   const height = body.spritesheetHeight;
   if (

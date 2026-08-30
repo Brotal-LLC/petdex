@@ -26,6 +26,7 @@ import { withNextDataCache } from "@/lib/next-data-cache";
 import { rowToPet } from "@/lib/pets";
 import { embedQuery, looksLikeVibeQuery } from "@/lib/query-embed";
 import { toCurrentR2PublicUrl } from "@/lib/r2-public-url";
+import { COMMERCIAL_PET_LICENSES } from "@/lib/submissions-validation";
 import {
   PET_KINDS,
   PET_VIBES,
@@ -56,6 +57,13 @@ export type SearchInput = {
    * data. Fallback ordering when missing is the legacy alpha sort.
    */
   shuffleSeed?: string;
+  /**
+   * Restrict results to pets whose creator declared a license that permits
+   * commercial use. Pets predating the license field are 'unspecified' and
+   * are excluded: their creators never granted anything, so silence must
+   * not read as permission.
+   */
+  commercialOnly?: boolean;
 };
 
 export type SearchFacets = {
@@ -142,7 +150,8 @@ export async function searchPets(
     !(input.vibes && input.vibes.length > 0) &&
     !(input.colorFamilies && input.colorFamilies.length > 0) &&
     !(input.batches && input.batches.length > 0) &&
-    !(input.spriteVersions && input.spriteVersions.length > 0);
+    !(input.spriteVersions && input.spriteVersions.length > 0) &&
+    !input.commercialOnly;
 
   if (isVibe) {
     const out = await vibeSearch({
@@ -157,6 +166,12 @@ export async function searchPets(
   }
 
   const filters = [eq(schema.submittedPets.status, "approved")];
+
+  if (input.commercialOnly) {
+    filters.push(
+      inArray(schema.submittedPets.license, [...COMMERCIAL_PET_LICENSES]),
+    );
+  }
 
   if (input.kinds && input.kinds.length > 0) {
     filters.push(inArray(schema.submittedPets.kind, input.kinds));
@@ -336,6 +351,7 @@ async function vibeSearch(args: {
       sp.featured, sp.dhash, sp.status, sp.source,
       sp.owner_id, sp.owner_email,
       sp.credit_name, sp.credit_url, sp.credit_image,
+      sp.license, sp.license_declared_at,
       sp.created_at, sp.approved_at, sp.rejected_at, sp.rejection_reason,
       coalesce(pm.install_count, 0) as install_count,
       coalesce(pm.like_count, 0) as like_count,
@@ -489,6 +505,10 @@ function rowToSchema(
     creditName: (row.credit_name as string | null) ?? null,
     creditUrl: (row.credit_url as string | null) ?? null,
     creditImage: (row.credit_image as string | null) ?? null,
+    license:
+      (row.license as typeof schema.submittedPets.$inferSelect.license) ??
+      "unspecified",
+    licenseDeclaredAt: (row.license_declared_at as Date | null) ?? null,
     createdAt: new Date(row.created_at as string),
     approvedAt: row.approved_at ? new Date(row.approved_at as string) : null,
     rejectedAt: row.rejected_at ? new Date(row.rejected_at as string) : null,
