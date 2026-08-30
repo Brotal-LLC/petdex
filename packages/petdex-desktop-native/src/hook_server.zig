@@ -95,6 +95,12 @@ pub const Bubble = struct {
     herdr_pane: [64]u8 = @splat(0),
     herdr_pane_len: usize = 0,
     busy: bool = false,
+    /// Per-agent attention, when the sender knows it. `busy` alone cannot
+    /// tell a blocked agent from an idle one, and that distinction is the
+    /// whole point of showing a body per agent. Empty means the sender did
+    /// not say, and readers fall back to `busy`.
+    agent_state: [16]u8 = @splat(0),
+    agent_state_len: usize = 0,
     counter: u64 = 0,
 
     pub fn sessionSlice(self: *const Bubble) []const u8 {
@@ -108,6 +114,9 @@ pub const Bubble = struct {
     }
     pub fn herdrPaneSlice(self: *const Bubble) []const u8 {
         return self.herdr_pane[0..self.herdr_pane_len];
+    }
+    pub fn agentStateSlice(self: *const Bubble) []const u8 {
+        return self.agent_state[0..self.agent_state_len];
     }
 };
 
@@ -264,6 +273,25 @@ pub const Mailbox = struct {
         return slot.counter;
     }
 
+    /// Record per-agent attention for a session that already has a slot.
+    /// Separate from setBubbleWithMetadata so the nine-parameter contract
+    /// every existing caller uses stays exactly as it is: a sender that
+    /// knows the state calls this right after, and one that does not
+    /// leaves the field empty for readers to fall back on `busy`.
+    pub fn setBubbleAgentState(self: *Mailbox, session: []const u8, state: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.bubbles[0..self.bubbles_len]) |*b| {
+            if (!std.mem.eql(u8, b.sessionSlice(), session)) continue;
+            const n = @min(state.len, b.agent_state.len);
+            @memcpy(b.agent_state[0..n], state[0..n]);
+            @memset(b.agent_state[n..], 0);
+            b.agent_state_len = n;
+            self.bubbles_dirty = true;
+            return;
+        }
+    }
+
     /// Drain the whole set into `out`, returning how many slots landed.
     /// All-or-nothing rather than per-bubble: the consumer re-renders
     /// the stack as a unit, so a partial copy has no meaning.
@@ -302,6 +330,50 @@ pub const Mailbox = struct {
 };
 
 pub var mailbox: Mailbox = .{};
+
+pub const AuthCallback = struct {
+    code: [2048]u8 = @splat(0),
+    code_len: usize = 0,
+    state: [128]u8 = @splat(0),
+    state_len: usize = 0,
+    error_text: [256]u8 = @splat(0),
+    error_len: usize = 0,
+
+    pub fn codeSlice(self: *const AuthCallback) []const u8 {
+        return self.code[0..self.code_len];
+    }
+
+    pub fn stateSlice(self: *const AuthCallback) []const u8 {
+        return self.state[0..self.state_len];
+    }
+
+    pub fn errorSlice(self: *const AuthCallback) []const u8 {
+        return self.error_text[0..self.error_len];
+    }
+};
+
+pub const AuthMailbox = struct {
+    mutex: SpinMutex = .{},
+    callback: AuthCallback = .{},
+    dirty: bool = false,
+
+    pub fn set(self: *AuthMailbox, callback: AuthCallback) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.callback = callback;
+        self.dirty = true;
+    }
+
+    pub fn take(self: *AuthMailbox) ?AuthCallback {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (!self.dirty) return null;
+        self.dirty = false;
+        return self.callback;
+    }
+};
+
+pub var auth_mailbox: AuthMailbox = .{};
 
 const valid_states = [_][]const u8{
     "idle",    "running", "running-left", "running-right", "waving",
@@ -510,7 +582,7 @@ fn handleConnection(server: *Server, conn: *Conn) void {
     const target = part_it.next() orelse return;
     const path = if (std.mem.indexOfScalar(u8, target, '?')) |q| target[0..q] else target;
 
-    route(server, conn, method, path, head, body);
+    route(server, conn, method, target, path, head, body);
 }
 
 fn receiveWithTimeout(conn: *Conn, buffer: []u8, timeout: std.Io.Timeout) !usize {
@@ -585,10 +657,27 @@ fn windowsRelativeTimeoutFromNanoseconds(nanoseconds: i96) std.os.windows.LARGE_
     return -@as(std.os.windows.LARGE_INTEGER, @intCast(bounded));
 }
 
-fn route(server: *Server, conn: *Conn, method: []const u8, path: []const u8, head: []const u8, body: []const u8) void {
+fn route(server: *Server, conn: *Conn, method: []const u8, target: []const u8, path: []const u8, head: []const u8, body: []const u8) void {
     const get = std.mem.eql(u8, method, "GET");
     const post = std.mem.eql(u8, method, "POST");
     var scratch: [512]u8 = undefined;
+
+    if (get and std.mem.eql(u8, path, "/callback")) {
+        const query = if (std.mem.indexOfScalar(u8, target, '?')) |q| target[q + 1 ..] else "";
+        var callback: AuthCallback = .{};
+        if (queryValue(query, "code", &callback.code)) |value| callback.code_len = value.len;
+        if (queryValue(query, "state", &callback.state)) |value| callback.state_len = value.len;
+        if (queryValue(query, "error_description", &callback.error_text)) |value| {
+            callback.error_len = value.len;
+        } else if (queryValue(query, "error", &callback.error_text)) |value| {
+            callback.error_len = value.len;
+        }
+        auth_mailbox.set(callback);
+        if (callback.code_len > 0 and callback.state_len > 0) {
+            return respondHtml(conn, 200, "<!doctype html><meta charset=utf-8><title>Petdex</title><style>body{background:#0c0c0f;color:#f5f5f7;font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0}main{text-align:center}h1{font-size:24px}</style><main><h1>Signed in to Petdex</h1><p>You can close this tab and return to the app.</p></main>");
+        }
+        return respondHtml(conn, 400, "<!doctype html><meta charset=utf-8><title>Petdex</title><style>body{background:#0c0c0f;color:#f5f5f7;font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0}main{text-align:center}h1{font-size:24px}</style><main><h1>Petdex sign-in failed</h1><p>Return to the app and try again.</p></main>");
+    }
 
     if (get and std.mem.eql(u8, path, "/health")) {
         return respond(conn, 200, "{\"ok\":true,\"port\":7777}");
@@ -677,6 +766,11 @@ fn route(server: *Server, conn: *Conn, method: []const u8, path: []const u8, hea
             ) catch {};
         }
         const counter = mailbox.setBubbleWithMetadata(session, capped, agent[0..@min(agent.len, 24)], title[0..@min(title.len, 96)], origin_app, source_tty, source_cwd, herdr_pane, busy);
+        // Optional: a sender that can tell blocked from working says so
+        // here. Older senders omit it and keep the busy-only behaviour.
+        if (jsonString(body, "agent_state")) |state| {
+            mailbox.setBubbleAgentState(session, state[0..@min(state.len, 16)]);
+        }
         mirrorBubble(server, capped, counter, title[0..@min(title.len, 96)], agent[0..@min(agent.len, 24)], busy) catch {};
         const out = std.fmt.bufPrint(&scratch, "{{\"ok\":true,\"counter\":{d}}}", .{counter}) catch return;
         return respond(conn, 200, out);
@@ -711,6 +805,14 @@ fn respondRuntimeFile(server: *Server, conn: *Conn, name: []const u8, fallback: 
 // ------------------------------------------------------------ http helpers
 
 fn respond(conn: *Conn, status: u16, body: []const u8) void {
+    respondTyped(conn, status, "application/json", body);
+}
+
+fn respondHtml(conn: *Conn, status: u16, body: []const u8) void {
+    respondTyped(conn, status, "text/html; charset=utf-8", body);
+}
+
+fn respondTyped(conn: *Conn, status: u16, content_type: []const u8, body: []const u8) void {
     var buf: [1024]u8 = undefined;
     const reason = switch (status) {
         200 => "OK",
@@ -722,12 +824,44 @@ fn respond(conn: *Conn, status: u16, body: []const u8) void {
         429 => "Too Many Requests",
         else => "OK",
     };
-    const head = std.fmt.bufPrint(&buf, "HTTP/1.1 {d} {s}\r\ncontent-type: application/json\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n", .{ status, reason, body.len }) catch return;
+    const head = std.fmt.bufPrint(&buf, "HTTP/1.1 {d} {s}\r\ncontent-type: {s}\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n", .{ status, reason, content_type, body.len }) catch return;
     var write_buf: [64]u8 = undefined;
     var writer = conn.stream.writer(conn.io, &write_buf);
     writer.interface.writeAll(head) catch return;
     writer.interface.writeAll(body) catch return;
     writer.interface.flush() catch return;
+}
+
+fn hexValue(c: u8) ?u8 {
+    if (c >= '0' and c <= '9') return c - '0';
+    if (c >= 'a' and c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' and c <= 'F') return c - 'A' + 10;
+    return null;
+}
+
+fn queryValue(query: []const u8, wanted: []const u8, out: []u8) ?[]const u8 {
+    var pairs = std.mem.splitScalar(u8, query, '&');
+    while (pairs.next()) |pair| {
+        const equal = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+        if (!std.mem.eql(u8, pair[0..equal], wanted)) continue;
+        var source = pair[equal + 1 ..];
+        var written: usize = 0;
+        while (source.len > 0) {
+            if (written >= out.len) return null;
+            if (source[0] == '%' and source.len >= 3) {
+                const hi = hexValue(source[1]) orelse return null;
+                const lo = hexValue(source[2]) orelse return null;
+                out[written] = (hi << 4) | lo;
+                source = source[3..];
+            } else {
+                out[written] = if (source[0] == '+') ' ' else source[0];
+                source = source[1..];
+            }
+            written += 1;
+        }
+        return out[0..written];
+    }
+    return null;
 }
 
 fn headerValue(head: []const u8, name: []const u8) ?[]const u8 {
@@ -928,6 +1062,13 @@ test "bubble session key prefers and normalizes canonical conversations" {
     const normalized = bubbleSessionKey(body, &hash);
     try std.testing.expectEqual(@as(usize, 64), normalized.len);
     try std.testing.expect(!std.mem.eql(u8, normalized, long[0..64]));
+}
+
+test "OAuth callback query values are decoded and bounded" {
+    var out: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("hello world", queryValue("code=hello%20world&state=abc", "code", &out).?);
+    try std.testing.expectEqualStrings("abc", queryValue("code=hello&state=abc", "state", &out).?);
+    try std.testing.expect(queryValue("code=toolong", "code", out[0..3]) == null);
 }
 
 test "two sessions hold two bubbles and neither overwrites the other" {

@@ -28,6 +28,8 @@ const remote_ssh = @import("remote_ssh.zig");
 const remote_writeback = @import("remote_writeback.zig");
 const remote_runtime = @import("remote_runtime.zig");
 const herdr_status = @import("herdr_status.zig");
+pub const desktop_auth = @import("desktop_auth.zig");
+const flock_mod = @import("flock.zig");
 pub const updates = @import("updates.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
@@ -96,6 +98,8 @@ pub const Msg = union(enum) {
     set_scale: f32,
     open_pets_folder,
     open_pet_page: u32,
+    open_active_pet_page,
+    open_website,
     appearance: native_sdk.platform.Appearance,
     toggle_bubbles,
     toggle_bubbles_per_conversation,
@@ -118,6 +122,8 @@ pub const Msg = union(enum) {
     dsh_remove_done: native_sdk.EffectExit,
     pet_filter: canvas.TextInputEvent,
     toggle_pets_expanded,
+    toggle_flock_window,
+    focus_flock_member: u32,
     manifest_done: native_sdk.EffectExit,
     pet_json_done: native_sdk.EffectExit,
     spritesheet_done: native_sdk.EffectExit,
@@ -138,9 +144,22 @@ pub const Msg = union(enum) {
     download_update,
     copy_brew_command,
     brew_command_copied: native_sdk.EffectClipboardResult,
+    auth_sign_in,
+    auth_refresh,
+    auth_sign_out,
+    auth_install_pet: u32,
+    auth_open_pet: u32,
+    auth_open_library,
+    auth_open_community,
+    set_pet_source: u32,
+    settings_scrolled: canvas.ScrollState,
+    auth_token_response: native_sdk.EffectResponse,
+    auth_avatar_response: native_sdk.EffectResponse,
+    auth_preview_response: native_sdk.EffectResponse,
+    auth_library_done: native_sdk.EffectExit,
     noop,
 
-    pub const view_unbound = .{ "frame_tick", "poll_tick", "physics_tick", "frame_clock", "cycle_state", "native_drag_watchdog", "chime_done", "quit_app", "toggle_focus_mode", "shuffle_pet", "dsh_install_done", "dsh_remove_done", "remote_line", "remote_done", "remote_backoff", "update_boot_check", "update_response", "homebrew_done", "homebrew_timeout", "brew_command_copied" };
+    pub const view_unbound = .{ "frame_tick", "poll_tick", "physics_tick", "frame_clock", "cycle_state", "native_drag_watchdog", "chime_done", "quit_app", "toggle_focus_mode", "shuffle_pet", "dsh_install_done", "dsh_remove_done", "remote_line", "remote_done", "remote_backoff", "update_boot_check", "update_response", "homebrew_done", "homebrew_timeout", "brew_command_copied", "auth_token_response", "auth_avatar_response", "auth_preview_response", "auth_library_done" };
 };
 
 pub const Model = struct {
@@ -325,12 +344,21 @@ pub const Model = struct {
     pet_filter: [48]u8 = @splat(0),
     pet_filter_len: usize = 0,
     pets_expanded: bool = false,
+    /// One body per live agent. Derived from the same bubbles the
+    /// mailbox already keys by session, so the set exists whether or
+    /// not the window is open.
+    flock: flock_mod.Model = .{},
     install: InstallState = .{},
     remotes: [remote_runtime.max_remotes]remote_runtime.Slot = .{ .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{} },
     remote_count: usize = 0,
     dark: bool = true,
     high_contrast: bool = false,
     reduce_motion: bool = false,
+    auth: desktop_auth.State = .{},
+    pet_source: desktop_auth.LibraryView = .installed,
+    settings_scroll: f32 = 0,
+    auth_preview_next: usize = 0,
+    auth_preview_ready: [12]bool = @splat(false),
 };
 
 /// Petdex web tokens (globals.css) translated from OKLCH: brand purple
@@ -884,11 +912,165 @@ const update_boot_timer_key: u64 = 33;
 const homebrew_timeout_timer_key: u64 = 34;
 const dsh_install_key: u64 = 35;
 const dsh_remove_key: u64 = 36;
+const auth_token_key: u64 = 43;
+const auth_library_key: u64 = 44;
+const auth_avatar_key: u64 = 45;
+const auth_preview_key: u64 = 46;
 const update_boot_delay_ms: u32 = 5000;
 const update_background_interval_ms: i64 = 24 * 60 * 60 * 1000;
 const update_settings_interval_ms: i64 = 5 * 60 * 1000;
 const update_failure_retry_ms: u64 = 60 * 60 * 1000;
 const homebrew_timeout_ms: u64 = 8000;
+
+fn loadAuthSession(model: *Model, fx: *Effects) void {
+    if (!desktop_auth.available) return;
+    model.auth.phase = .loading;
+    var stored_buf: [17000]u8 = undefined;
+    const stored = desktop_auth.loadStoredSession(&stored_buf) orelse {
+        model.auth.clearSession();
+        return;
+    };
+    if (!desktop_auth.applyStoredTokens(&model.auth, boot_allocator, stored)) {
+        model.auth.clearSession();
+        return;
+    }
+    fetchAuthLibrary(model, fx);
+}
+
+fn saveAuthSession(model: *const Model, fx: *Effects) void {
+    _ = fx;
+    if (!desktop_auth.available) return;
+    var session_buf: [17000]u8 = undefined;
+    const token = desktop_auth.storedTokens(&model.auth, &session_buf) orelse return;
+    if (!desktop_auth.saveStoredSession(token)) std.debug.print("petdex: macOS Keychain could not save the session\n", .{});
+}
+
+fn fetchAuthLibrary(model: *Model, fx: *Effects) void {
+    if (model.auth.access_token_len == 0) {
+        model.auth.setError("Your Petdex session is missing an access token");
+        return;
+    }
+    model.auth.phase = .syncing;
+    var config_buf: [9000]u8 = undefined;
+    const config = std.fmt.bufPrint(&config_buf, "url = \"{s}\"\nheader = \"Authorization: Bearer {s}\"\nsilent\nshow-error\nwrite-out = \"\\n%{{http_code}}\"\n", .{ env_auth_library_url, model.auth.accessToken() }) catch {
+        model.auth.setError("Your Petdex session token is too large");
+        return;
+    };
+    const argv = [_][]const u8{ "/usr/bin/curl", "--max-time", "15", "--config", "-" };
+    fx.spawn(.{
+        .key = auth_library_key,
+        .argv = &argv,
+        .stdin = config,
+        .output = .collect,
+        .on_exit = Effects.exitMsg(.auth_library_done),
+    });
+}
+
+fn requestAuthTokens(model: *Model, code: ?[]const u8, fx: *Effects) void {
+    var body_buf: [10000]u8 = undefined;
+    const body = if (code) |value| desktop_auth.tokenBody(&model.auth, value, &body_buf) else desktop_auth.refreshBody(&model.auth, &body_buf);
+    const payload = body orelse {
+        model.auth.setError("Could not prepare the Petdex sign-in request");
+        return;
+    };
+    model.auth.refreshing = code == null;
+    model.auth.phase = .exchanging;
+    const headers = [_]std.http.Header{.{ .name = "content-type", .value = "application/x-www-form-urlencoded" }};
+    fx.fetch(.{
+        .key = auth_token_key,
+        .method = .POST,
+        .url = desktop_auth.issuer ++ "/oauth/token",
+        .headers = &headers,
+        .body = payload,
+        .timeout_ms = 15000,
+        .on_response = Effects.responseMsg(.auth_token_response),
+    });
+}
+
+fn authPetForCell(model: *const Model, cell: usize) ?*const desktop_auth.Pet {
+    if (cell < 6) {
+        if (cell >= model.auth.owned_len) return null;
+        return &model.auth.owned[cell];
+    }
+    const index = cell - 6;
+    if (index >= model.auth.caught_len) return null;
+    return &model.auth.caught[index];
+}
+
+fn fetchNextAuthPreview(model: *Model, fx: *Effects) void {
+    while (model.auth_preview_next < auth_preview_count) {
+        const cell = model.auth_preview_next;
+        model.auth_preview_next += 1;
+        const pet = authPetForCell(model, cell) orelse continue;
+        if (pet.thumbnail_url_len == 0) continue;
+        fx.fetch(.{
+            .key = auth_preview_key,
+            .url = pet.thumbnailUrl(),
+            .timeout_ms = 10000,
+            .on_response = Effects.responseMsg(.auth_preview_response),
+        });
+        return;
+    }
+}
+
+fn startAuthImages(model: *Model, fx: *Effects) void {
+    auth_avatar_ready = false;
+    model.auth_preview_next = 0;
+    model.auth_preview_ready = @splat(false);
+    if (auth_preview_pixels.len == 0) {
+        auth_preview_pixels = boot_allocator.alloc(u8, auth_preview_columns * auth_preview_cell * 2 * auth_preview_cell * 4) catch return;
+    }
+    @memset(auth_preview_pixels, 0);
+    if (model.auth.avatar_url_len > 0) {
+        fx.fetch(.{
+            .key = auth_avatar_key,
+            .url = model.auth.avatarUrl(),
+            .timeout_ms = 10000,
+            .on_response = Effects.responseMsg(.auth_avatar_response),
+        });
+    }
+    fetchNextAuthPreview(model, fx);
+}
+
+fn registerAuthPreview(model: *Model, response: native_sdk.EffectResponse, fx: *Effects) void {
+    const cell = model.auth_preview_next -| 1;
+    if (cell >= auth_preview_count or response.outcome != .ok or response.status != 200 or response.truncated) {
+        fetchNextAuthPreview(model, fx);
+        return;
+    }
+    const services = fx.services orelse {
+        fetchNextAuthPreview(model, fx);
+        return;
+    };
+    const scratch = boot_allocator.alloc(u8, 512 * 512 * 4) catch {
+        fetchNextAuthPreview(model, fx);
+        return;
+    };
+    defer boot_allocator.free(scratch);
+    const decoded = services.decodeImage(response.body, scratch) catch {
+        fetchNextAuthPreview(model, fx);
+        return;
+    };
+    if (decoded.width == 0 or decoded.height == 0) {
+        fetchNextAuthPreview(model, fx);
+        return;
+    }
+    const atlas_width = auth_preview_columns * auth_preview_cell;
+    const cell_x = (cell % auth_preview_columns) * auth_preview_cell;
+    const cell_y = (cell / auth_preview_columns) * auth_preview_cell;
+    for (0..auth_preview_cell) |y| {
+        const src_y = y * decoded.height / auth_preview_cell;
+        for (0..auth_preview_cell) |x| {
+            const src_x = x * decoded.width / auth_preview_cell;
+            const src_off = (src_y * decoded.width + src_x) * 4;
+            const dst_off = ((cell_y + y) * atlas_width + cell_x + x) * 4;
+            @memcpy(auth_preview_pixels[dst_off..][0..4], scratch[src_off..][0..4]);
+        }
+    }
+    model.auth_preview_ready[cell] = true;
+    fx.registerImage(auth_preview_atlas_id, atlas_width, auth_preview_cell * 2, auth_preview_pixels) catch {};
+    fetchNextAuthPreview(model, fx);
+}
 
 fn updateCachePhase(model: *Model) void {
     if (model.latest_version_len == 0) {
@@ -1011,6 +1193,7 @@ var sheet: Sheet = .{};
 /// global getenv; env rides std.process.Init).
 var env_home: ?[]const u8 = null;
 var env_wanted_pet: ?[]const u8 = null;
+var env_auth_library_url: []const u8 = desktop_auth.library_url;
 
 fn readFileAbsolute(io: std.Io, allocator: std.mem.Allocator, path: []const u8, max: usize) ![]u8 {
     var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
@@ -1328,6 +1511,13 @@ var initial_pet_y: ?f64 = null;
 // assets/agents/, re-registered only when the agent changes.
 const avatar_image_id: u64 = 13;
 const tail_image_id: u64 = 14;
+const auth_avatar_image_id: u64 = 15;
+const auth_preview_atlas_id: u64 = 16;
+const auth_preview_cell: usize = 48;
+const auth_preview_columns: usize = 6;
+const auth_preview_count: usize = 12;
+var auth_avatar_ready: bool = false;
+var auth_preview_pixels: []u8 = &.{};
 // One slot for every agent logo plus fallback, packed side by side and read back with
 // `image_src` (the thumbnail atlas above does the same). Previously each
 // agent held its own registry id, which ran the app into the SDK's
@@ -1697,6 +1887,64 @@ fn registerStateFrames(state: State, fx: *Effects) void {
     }
 }
 
+/// Slots for the flock's per-state stills. The pet window animates one
+/// state at a time through slots 1..8; a flock shows several states at
+/// once, so each body needs a frame of its own state resident. One still
+/// per state is enough to tell them apart at a glance, and it fits the
+/// registry's remaining budget where eight animated frames per body would
+/// not.
+const flock_atlas_image_id: u64 = 10;
+const flock_states = [_]State{ .waiting, .running, .idle, .failed, .review };
+
+pub fn flockImageId(state: State) u64 {
+    _ = state;
+    return flock_atlas_image_id;
+}
+
+fn flockFrameIndex(state: State) usize {
+    return switch (state) {
+        .waiting => 0,
+        .running, .@"running-right", .@"running-left" => 1,
+        .failed => 3,
+        .review => 4,
+        else => 2,
+    };
+}
+
+fn flockImageRect(state: State) geometry.RectF {
+    return geometry.RectF.init(
+        @as(f32, @floatFromInt(flockFrameIndex(state))) * frame_w,
+        0,
+        frame_w,
+        frame_h,
+    );
+}
+
+/// Register one representative still per flock state. Called when the
+/// sheet loads, so the bodies have artwork before the window opens.
+fn registerFlockFrames(fx: *Effects) void {
+    if (sheet.pixels.len == 0) return;
+    const fw = sheet.width / cols;
+    const fh = sheet.height / sheet.rows;
+    const atlas_w = fw * flock_states.len;
+    var scratch = boot_allocator.alloc(u8, atlas_w * fh * 4) catch return;
+    defer boot_allocator.free(scratch);
+    for (flock_states, 0..) |state, index| {
+        const def = stateDef(state);
+        const src_x = def.frames[0].col * fw;
+        const src_y = def.row * fh;
+        for (0..fh) |y| {
+            const src_off = ((src_y + y) * sheet.width + src_x) * 4;
+            const dst_off = (y * atlas_w + index * fw) * 4;
+            @memcpy(scratch[dst_off..][0 .. fw * 4], sheet.pixels[src_off..][0 .. fw * 4]);
+        }
+    }
+    fx.registerImage(flock_atlas_image_id, atlas_w, fh, scratch) catch |err| {
+        std.debug.print("petdex: flock frame register failed ({s})\n", .{@errorName(err)});
+        return;
+    };
+}
+
 const poll_timer_key: u64 = 2;
 const poll_interval_ms: u32 = 100;
 const min_dwell_ms: u32 = 250;
@@ -1896,6 +2144,7 @@ pub fn boot(model: *Model, fx: *Effects) void {
         };
         startRemotes(model, fx);
     }
+    loadAuthSession(model, fx);
     fx.startTimer(.{
         .key = poll_timer_key,
         .interval_ms = poll_interval_ms,
@@ -1978,6 +2227,10 @@ pub fn boot(model: *Model, fx: *Effects) void {
     // draw.
     pet_display_name = catalog[active].slice();
     registerStateFrames(model.state, fx);
+    // The flock draws several states at once, so its stills are resident
+    // from the moment the sheet is: a body must not wait for its own
+    // state to become the pet window's.
+    registerFlockFrames(fx);
     model.sheet_loaded = true;
     const n = @min(pet_display_name.len, model.pet_name.len);
     @memcpy(model.pet_name[0..n], pet_display_name[0..n]);
@@ -2044,6 +2297,23 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             applyState(model, model.state.next(), 0, fx);
         },
         .toggle_pets_expanded => model.pets_expanded = !model.pets_expanded,
+        .focus_flock_member => |index| {
+            // The pane id rode all the way from Herdr on the bubble this
+            // body was built from, so reaching the session is the same
+            // verb the pet window already uses for the front bubble.
+            if (index >= model.flock.len) return;
+            const member = &model.flock.members[index];
+            const pane = member.herdrPaneSlice();
+            if (pane.len == 0) return;
+            if (env_home) |home| _ = plat.activateHerdrPane(home, pane);
+        },
+        .toggle_flock_window => {
+            model.flock.open = !model.flock.open;
+            // Badges read from the shared agent strip. It loads at boot,
+            // but a theme flip since then would leave it in the wrong
+            // palette; this reloads only when that happened.
+            if (model.flock.open) loadAgentsAtlas(model.dark, fx);
+        },
         .dismiss_install_error => model.install.error_len = 0,
         .install_first_pet => {
             // A fresh install has no pets, so the pet window renders an
@@ -2246,11 +2516,124 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.settings_open = true;
         },
+        .auth_sign_in => {
+            if (!desktop_auth.available or model.auth.phase == .authorizing or model.auth.phase == .exchanging) return;
+            var url_buf: [1024]u8 = undefined;
+            const url = desktop_auth.begin(&model.auth, &url_buf) orelse {
+                model.auth.setError("Could not start Petdex sign-in");
+                return;
+            };
+            plat.openExternal(url);
+        },
+        .auth_refresh => {
+            if (model.auth.phase != .signed_in and model.auth.phase != .failed) return;
+            if (model.auth.access_token_len > 0) {
+                fetchAuthLibrary(model, fx);
+            } else {
+                requestAuthTokens(model, null, fx);
+            }
+        },
+        .auth_sign_out => {
+            model.auth.clearSession();
+            model.pet_source = .installed;
+            auth_avatar_ready = false;
+            model.auth_preview_ready = @splat(false);
+            if (desktop_auth.available and !desktop_auth.deleteStoredSession()) std.debug.print("petdex: macOS Keychain could not delete the session\n", .{});
+        },
+        .auth_install_pet => |cloud_id| {
+            const caught = cloud_id >= desktop_auth.max_pets;
+            const index: usize = if (caught) cloud_id - desktop_auth.max_pets else cloud_id;
+            const pet = if (caught) blk: {
+                if (index >= model.auth.caught_len) return;
+                break :blk &model.auth.caught[index];
+            } else blk: {
+                if (index >= model.auth.owned_len) return;
+                break :blk &model.auth.owned[index];
+            };
+            if (pet.status != .approved and pet.status != .caught) return;
+            if (catalogIndexOf(pet.slugSlice())) |catalog_index| {
+                update(model, .{ .select_pet = @intCast(catalog_index) }, fx);
+                return;
+            }
+            if (model.install.busy()) return;
+            model.install.error_len = 0;
+            _ = model.install.enqueueRequest(pet.slugSlice(), true);
+            startInstallQueue(model, fx);
+        },
+        .auth_open_pet => |cloud_id| {
+            const caught = cloud_id >= desktop_auth.max_pets;
+            const index: usize = if (caught) cloud_id - desktop_auth.max_pets else cloud_id;
+            const pet = if (caught) blk: {
+                if (index >= model.auth.caught_len) return;
+                break :blk &model.auth.caught[index];
+            } else blk: {
+                if (index >= model.auth.owned_len) return;
+                break :blk &model.auth.owned[index];
+            };
+            if (pet.status != .approved and pet.status != .caught) {
+                plat.openExternal("https://petdex.dev/my-pets");
+                return;
+            }
+            var url: [256]u8 = undefined;
+            const value = std.fmt.bufPrint(&url, "https://petdex.dev/pets/{s}", .{pet.slugSlice()}) catch return;
+            plat.openExternal(value);
+        },
+        .auth_open_library => plat.openExternal("https://petdex.dev/my-pets"),
+        .auth_open_community => plat.openExternal("https://petdex.dev"),
+        .set_pet_source => |source| {
+            model.pet_source = switch (source) {
+                0 => .installed,
+                1 => .yours,
+                2 => .caught,
+                else => return,
+            };
+            model.pets_expanded = false;
+            model.settings_scroll = 0;
+        },
+        .settings_scrolled => |state| model.settings_scroll = state.offset,
+        .auth_token_response => |response| {
+            if (response.outcome != .ok or response.status != 200 or response.truncated or !desktop_auth.applyTokenResponse(&model.auth, boot_allocator, response.body)) {
+                model.auth.refreshing = false;
+                model.auth.setError("Petdex sign-in could not complete");
+                return;
+            }
+            saveAuthSession(model, fx);
+            fetchAuthLibrary(model, fx);
+        },
+        .auth_avatar_response => |response| {
+            if (response.outcome != .ok or response.status != 200 or response.truncated) return;
+            _ = fx.registerImageBytes(auth_avatar_image_id, response.body) catch return;
+            auth_avatar_ready = true;
+        },
+        .auth_preview_response => |response| registerAuthPreview(model, response, fx),
+        .auth_library_done => |exit| {
+            const output = std.mem.trimEnd(u8, exit.output, "\r\n");
+            const newline = std.mem.lastIndexOfScalar(u8, output, '\n');
+            const status = if (newline) |at| std.fmt.parseInt(u16, output[at + 1 ..], 10) catch 0 else 0;
+            const body = if (newline) |at| output[0..at] else "";
+            if (exit.reason == .exited and exit.code == 0 and status == 401 and model.auth.refresh_token_len > 0 and !model.auth.refreshing) {
+                requestAuthTokens(model, null, fx);
+                return;
+            }
+            if (exit.reason != .exited or exit.code != 0 or exit.output_truncated or status != 200 or !desktop_auth.applyLibrary(&model.auth, boot_allocator, body)) {
+                model.auth.refreshing = false;
+                model.auth.setError("Could not sync your My Petdex library");
+                return;
+            }
+            model.auth.refreshing = false;
+            startAuthImages(model, fx);
+        },
         .settings_closed => model.settings_open = false,
         .update_boot_check => |timer| {
             if (timer.outcome == .fired and model.update_checks_enabled) startUpdateCheck(model, false, fx);
         },
-        .check_updates => startUpdateCheck(model, true, fx),
+        .check_updates => {
+            if (model.update_phase == .available) {
+                plat.openExternal(updates.downloadUrl());
+            } else {
+                startUpdateCheck(model, true, fx);
+            }
+        },
         .toggle_update_checks => {
             model.update_checks_enabled = !model.update_checks_enabled;
             if (!model.update_checks_enabled) {
@@ -2361,6 +2744,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // the next day.
             model.rotation_day = dayFromWallMs(fx.wallMs());
             registerStateFrames(model.state, fx);
+            registerFlockFrames(fx);
             armFrameTimer(model, fx);
             saveSettings(model);
         },
@@ -2502,6 +2886,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             const url = std.fmt.bufPrint(&buf, "https://petdex.dev/pets/{s}", .{catalog[index].slice()}) catch return;
             plat.openExternal(url);
         },
+        .open_active_pet_page => {
+            if (model.active_pet >= catalog_mod.catalog_len) return;
+            var buf: [256]u8 = undefined;
+            const url = std.fmt.bufPrint(&buf, "https://petdex.dev/pets/{s}", .{catalog[model.active_pet].slice()}) catch return;
+            plat.openExternal(url);
+        },
+        .open_website => plat.openExternal("https://petdex.dev"),
         .appearance => |a| {
             model.dark = a.color_scheme == .dark;
             if (newestBubble(model)) |newest| {
@@ -2751,6 +3142,19 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .poll_tick => |timer| {
             if (timer.outcome != .fired) return;
+            if (hook_server.auth_mailbox.take()) |callback| {
+                if (model.auth.phase == .authorizing) {
+                    if (!std.mem.eql(u8, callback.stateSlice(), model.auth.oauthState())) {
+                        model.auth.setError("Petdex rejected the sign-in callback");
+                    } else if (callback.error_len > 0) {
+                        model.auth.setError(callback.errorSlice());
+                    } else if (callback.code_len > 0) {
+                        requestAuthTokens(model, callback.codeSlice(), fx);
+                    } else {
+                        model.auth.setError("Petdex rejected the sign-in callback");
+                    }
+                }
+            }
             // Ahead of the sheet guard on purpose: a machine with no pet
             // installed has no sheet, and that is precisely when a
             // `petdex://<slug>` link has work to do.
@@ -2791,6 +3195,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                     @memcpy(model.bubbles[0..count], drained[0..count]);
                     for (count..hook_server.max_bubbles) |i| model.bubbles[i] = .{};
                     model.bubbles_len = count;
+                    // The flock reads the same live set, one body per
+                    // session, instead of the single aggregate state the
+                    // pet window shows.
+                    flock_mod.reconcile(&model.flock, model.bubbles[0..count]);
                     syncBubbleDeadlines(model, previous[0..previous_len], previous_deadlines[0..previous_len], now);
                     if (newestBubble(model)) |newest| {
                         loadAgentAvatar(newest.agent[0..newest.agent_len], model.dark, fx);
@@ -2866,6 +3274,10 @@ pub fn onCommand(name: []const u8) ?Msg {
     if (std.mem.eql(u8, name, "petdex.quit")) return .quit_app;
     if (std.mem.eql(u8, name, "petdex.focus")) return .toggle_focus_mode;
     if (std.mem.eql(u8, name, "petdex.shuffle")) return .shuffle_pet;
+    if (std.mem.eql(u8, name, "petdex.website")) return .open_website;
+    if (std.mem.eql(u8, name, "petdex.pet-page")) return .open_active_pet_page;
+    if (std.mem.eql(u8, name, "petdex.updates")) return .check_updates;
+    if (std.mem.eql(u8, name, "petdex.flock")) return .toggle_flock_window;
     return null;
 }
 
@@ -2875,8 +3287,19 @@ pub const AppUi = canvas.Ui(Msg);
 
 const pet_menu = [_]AppUi.ContextMenuItem{
     .{ .label = "Open Settings", .msg = .open_settings },
+    .{ .label = "Open Flock", .msg = .toggle_flock_window },
+    .{ .label = "View Pet on Petdex", .msg = .open_active_pet_page },
     .{ .label = "Close Pet", .msg = .close_pet },
 };
+
+test "pet context menu opens the flock" {
+    try std.testing.expectEqualStrings("Open Flock", pet_menu[1].label);
+    const msg = pet_menu[1].msg orelse return error.TestUnexpectedResult;
+    switch (msg) {
+        .toggle_flock_window => {},
+        else => return error.TestUnexpectedResult,
+    }
+}
 
 // The visible card remains intrinsic and grows only with the text it actually
 // contains. These values size the surrounding transparent canvas generously
@@ -4221,6 +4644,143 @@ fn bubbleView(ui: *AppUi, model: *const Model) AppUi.Node {
 
 // --------------------------------------------------------- settings window
 
+// ------------------------------------------------------------- flock
+
+const flock_window_label = "flock";
+const flock_canvas_label = "flock-canvas";
+pub const companion_header_h: f32 = 28;
+/// Room under each body for its agent badge, plus the gap above it.
+const flock_badge_px: f32 = 18;
+/// Badge, the gap above it, and breathing room below: at exactly badge +
+/// gap the badge lands flush on the window edge and reads as clipped.
+const flock_label_h: f32 = flock_badge_px + 8;
+const flock_max_columns: usize = 4;
+/// Bodies render smaller than the solo pet: the point of the window is
+/// the whole set at a glance, not one mascot at full size.
+const flock_pet_scale: f32 = 0.6;
+
+fn flockLayout(model: *const Model) flock_mod.LayoutSpec {
+    _ = model;
+    return .{
+        .cell_w = frame_w * flock_pet_scale,
+        .cell_h = frame_h * flock_pet_scale,
+        .gap = 8,
+        .columns = flock_max_columns,
+        .label_h = flock_label_h,
+    };
+}
+
+/// One body per live agent, laid out in a grid. V1 draws every member
+/// with the active pet's current frame: the bodies are separate, the
+/// artwork is not yet. V3 gives each session its own pet.
+fn flockView(ui: *AppUi, model: *const Model) AppUi.Node {
+    if (model.flock.len == 0 or !model.sheet_loaded) {
+        var root = ui.column(.{ .grow = 1 }, .{
+            ui.el(.stack, .{ .height = companion_header_h, .window_drag = true }, .{}),
+            ui.column(.{ .grow = 1, .main = .center, .cross = .center }, .{
+                ui.text(.{ .size = .sm, .text_alignment = .center }, "No agents running"),
+            }),
+        });
+        root.widget.style.background = settingsBackground(model);
+        return root;
+    }
+    const spec = flockLayout(model);
+    const columns = flock_mod.columnsFor(model.flock.len, flock_max_columns);
+    var rows: [flock_mod.max_members]AppUi.Node = undefined;
+    var row_count: usize = 0;
+    var index: usize = 0;
+    while (index < model.flock.len) {
+        var cells: [flock_max_columns]AppUi.Node = undefined;
+        var cell_count: usize = 0;
+        while (cell_count < columns and index < model.flock.len) : (index += 1) {
+            cells[cell_count] = flockMember(ui, model, index, spec);
+            cell_count += 1;
+        }
+        rows[row_count] = ui.row(.{ .gap = spec.gap, .cross = .end }, cells[0..cell_count]);
+        row_count += 1;
+    }
+    var root = ui.column(.{ .grow = 1 }, .{
+        ui.el(.stack, .{ .height = companion_header_h, .window_drag = true }, .{}),
+        ui.column(.{ .grow = 1, .main = .center, .cross = .center, .gap = spec.gap }, rows[0..row_count]),
+    });
+    root.widget.style.background = settingsBackground(model);
+    return root;
+}
+
+fn flockSemanticLabel(state: State) []const u8 {
+    return switch (state) {
+        .waiting => "Agent blocked",
+        .running, .@"running-right", .@"running-left" => "Agent working",
+        .failed => "Agent failed",
+        .review => "Agent reading",
+        .waving, .jumping => "Agent finished",
+        else => "Agent idle",
+    };
+}
+
+/// Which bodies earn the amber marker: the ones where a human either has
+/// to act or would want to look. A failed tool call qualifies for the
+/// same reason a blocked prompt does, and neither is legible from the
+/// pose alone at this size.
+fn flockNeedsAttention(state: State) bool {
+    return state == .waiting or state == .failed;
+}
+
+fn flockMember(ui: *AppUi, model: *const Model, index: usize, spec: flock_mod.LayoutSpec) AppUi.Node {
+    const member = &model.flock.members[index];
+    var body = ui.image(.{
+        .width = spec.cell_w,
+        .height = spec.cell_h,
+        .image = @intCast(flockImageId(member.state)),
+        .semantics = .{ .label = flockSemanticLabel(member.state) },
+    });
+    body.widget.image_fit = .stretch;
+    body.widget.image_sampling = .nearest;
+    body.widget.image_src = flockImageRect(member.state);
+    // Whole cell, not just the sprite: a 115px target beats a 18px one,
+    // and the badge is part of the same body. A member with no pane (a
+    // direct hook outside Herdr) stays inert rather than offering a jump
+    // that would do nothing.
+    const pressable = member.herdrPaneSlice().len != 0;
+    return ui.column(.{
+        .cross = .center,
+        .gap = 2,
+        .on_press = if (pressable) .{ .focus_flock_member = @intCast(index) } else null,
+    }, .{
+        body,
+        flockBadge(ui, member),
+    });
+}
+
+/// Which agent this body belongs to. The logo reads faster than the name
+/// at this size and survives a narrow cell, and the strip it comes from
+/// is already compiled into the binary for the bubbles. The name stays as
+/// the accessibility label, so screen readers and the automation snapshot
+/// still get it.
+fn flockBadge(ui: *AppUi, member: *const flock_mod.Member) AppUi.Node {
+    const name = member.labelSlice();
+    const identity = if (agents_icons_ready and name.len != 0) blk: {
+        var badge = ui.image(.{
+            .width = flock_badge_px,
+            .height = flock_badge_px,
+            .image = agent_icon_atlas_id,
+            .semantics = .{ .label = name },
+        });
+        badge.widget.image_src = agentIconRect(agentIconIndex(name));
+        badge.widget.image_fit = .contain;
+        break :blk badge;
+    } else ui.text(.{ .size = .sm, .text_alignment = .center }, name);
+
+    // An agent that needs the human is the one thing worth spotting from
+    // across the room, and the resting poses of waiting and idle are too
+    // close to carry that on their own. Same amber marker the bubble
+    // already uses for the same meaning.
+    if (!flockNeedsAttention(member.state)) return identity;
+    var marker = ui.text(.{ .size = .sm }, "!");
+    marker.widget.style.foreground = canvas.Color.rgb8(250, 170, 48);
+    return ui.row(.{ .cross = .center, .gap = 3 }, .{ identity, marker });
+}
+
 const settings_window_label = "settings";
 const settings_canvas_label = "settings-canvas";
 
@@ -4276,6 +4836,20 @@ fn petdexWindows(model: *const Model, scratch: *PetdexApp.WindowsScratch) []cons
         }
         count += 1;
     }
+    if (model.flock.open) {
+        const size = flock_mod.windowSize(model.flock.len, flockLayout(model));
+        scratch.windows[count] = .{
+            .label = flock_window_label,
+            .canvas_label = flock_canvas_label,
+            .title = "Petdex Flock",
+            .width = size.w,
+            .height = size.h + companion_header_h,
+            .resizable = false,
+            .titlebar = .hidden_inset,
+            .on_close = .toggle_flock_window,
+        };
+        count += 1;
+    }
     if (model.settings_open) {
         scratch.windows[count] = .{
             .label = settings_window_label,
@@ -4284,6 +4858,7 @@ fn petdexWindows(model: *const Model, scratch: *PetdexApp.WindowsScratch) []cons
             .width = 420,
             .height = 680,
             .resizable = false,
+            .titlebar = .hidden_inset,
             .on_close = .settings_closed,
         };
         count += 1;
@@ -4291,8 +4866,26 @@ fn petdexWindows(model: *const Model, scratch: *PetdexApp.WindowsScratch) []cons
     return scratch.windows[0..count];
 }
 
+test "companion windows use the unified opaque shell" {
+    var model: Model = .{};
+    model.flock.open = true;
+    model.settings_open = true;
+    var scratch: PetdexApp.WindowsScratch = undefined;
+    const windows = petdexWindows(&model, &scratch);
+    try std.testing.expectEqual(@as(usize, 2), windows.len);
+    try std.testing.expectEqualStrings(flock_window_label, windows[0].label);
+    try std.testing.expectEqual(.hidden_inset, windows[0].titlebar);
+    try std.testing.expect(!windows[0].transparent);
+    try std.testing.expect(!windows[0].floating);
+    try std.testing.expectEqualStrings(settings_window_label, windows[1].label);
+    try std.testing.expectEqual(.hidden_inset, windows[1].titlebar);
+    try std.testing.expect(!windows[1].transparent);
+    try std.testing.expect(!windows[1].floating);
+}
+
 fn petdexWindowView(ui: *PetdexApp.Ui, model: *const Model, window_label: []const u8) PetdexApp.Ui.Node {
     if (std.mem.eql(u8, window_label, "bubble")) return bubbleView(ui, model);
+    if (std.mem.eql(u8, window_label, flock_window_label)) return flockView(ui, model);
     std.debug.assert(std.mem.eql(u8, window_label, settings_window_label));
     return settings_view.settingsView(ui, model, .{
         .ready = agents_icons_ready,
@@ -4303,6 +4896,13 @@ fn petdexWindowView(ui: *PetdexApp.Ui, model: *const Model, window_label: []cons
         .ready = &thumbs_ready,
         .cell_w = @floatFromInt(thumb_w),
         .cell_h = @floatFromInt(thumb_h),
+    }, .{
+        .avatar_ready = auth_avatar_ready,
+        .avatar_image = auth_avatar_image_id,
+        .preview_image = auth_preview_atlas_id,
+        .preview_ready = &model.auth_preview_ready,
+        .preview_cell = @floatFromInt(auth_preview_cell),
+        .preview_columns = auth_preview_columns,
     });
 }
 
@@ -4343,16 +4943,32 @@ fn refreshHookEntry(argv0: []const u8) void {
 /// Model-derived (the `status_item_fn` shape) so Focus Mode can show
 /// its state in the label; the static options keep icon and tooltip.
 fn petdexStatusItem(model: *const Model, scratch: *PetdexApp.StatusItemScratch) PetdexApp.StatusItemState {
+    const update_label = switch (model.update_phase) {
+        .checking => "Checking for Updates…",
+        .available => std.fmt.bufPrint(&scratch.title_buffer, "Update to Petdex {s}…", .{model.latest_version[0..model.latest_version_len]}) catch "Update Petdex…",
+        .current => std.fmt.bufPrint(&scratch.title_buffer, "Petdex is up to date · {s}", .{updates.current_version}) catch "Petdex is up to date",
+        .idle, .failed => std.fmt.bufPrint(&scratch.title_buffer, "Check for Updates… · {s}", .{updates.current_version}) catch "Check for Updates…",
+    };
     scratch.items[0] = .{ .id = 1, .label = "Open Settings", .command = "petdex.settings" };
-    scratch.items[1] = .{
-        .id = 2,
+    scratch.items[1] = .{ .id = 2, .label = "Open petdex.dev", .command = "petdex.website" };
+    scratch.items[2] = .{ .id = 3, .separator = true };
+    scratch.items[3] = .{
+        .id = 4,
         .label = if (model.focus_mode) "Focus Mode: On" else "Focus Mode: Off",
         .command = "petdex.focus",
     };
-    scratch.items[2] = .{ .id = 3, .label = "Shuffle Pet", .command = "petdex.shuffle" };
-    scratch.items[3] = .{ .id = 4, .separator = true };
-    scratch.items[4] = .{ .id = 5, .label = "Quit Petdex", .command = "petdex.quit" };
-    return .{ .items = scratch.items[0..5] };
+    scratch.items[4] = .{ .id = 5, .label = "Shuffle Pet", .command = "petdex.shuffle" };
+    scratch.items[5] = .{
+        .id = 6,
+        .label = if (model.flock.open) "Hide Flock" else "Show Flock",
+        .command = "petdex.flock",
+    };
+    scratch.items[6] = .{ .id = 7, .label = "View Pet on Petdex", .command = "petdex.pet-page" };
+    scratch.items[7] = .{ .id = 8, .separator = true };
+    scratch.items[8] = .{ .id = 9, .label = update_label, .command = "petdex.updates", .enabled = model.update_phase != .checking };
+    scratch.items[9] = .{ .id = 10, .separator = true };
+    scratch.items[10] = .{ .id = 11, .label = "Quit Petdex", .command = "petdex.quit" };
+    return .{ .items = scratch.items[0..11] };
 }
 
 /// The menu-bar button icon: the brand mark's silhouette with the face
@@ -4397,6 +5013,7 @@ pub fn main(init: std.process.Init) !void {
     // %USERPROFILE%\.petdex\pets. HOME still wins where it exists, so a
     // POSIX user pointing it elsewhere keeps that.
     env_home = init.environ_map.get("HOME") orelse init.environ_map.get("USERPROFILE");
+    env_auth_library_url = init.environ_map.get("PETDEX_LIBRARY_URL") orelse desktop_auth.library_url;
     // Claude Code honors CLAUDE_CONFIG_DIR for fully isolated installs;
     // wiring hooks into ~/.claude for those users writes a settings.json
     // their Claude Code never reads, and detection shows them as
@@ -4560,6 +5177,44 @@ test "transparent surfaces clear independently from settings" {
     model.dark = false;
     try std.testing.expectEqual(@as(f32, 0), petdexTokens(&model).colors.background.a);
     try std.testing.expectEqual(settings_alpha, settingsBackground(&model).a);
+}
+
+test "a flock body reserves more than its badge is tall" {
+    // At exactly badge + gap the badge landed flush on the window edge
+    // and read as clipped, which only the screenshot showed: the
+    // snapshot bounds looked correct.
+    try std.testing.expect(flock_label_h > flock_badge_px + 2);
+}
+
+test "every flock state names itself, none falls through to idle" {
+    // failed and review were mapped to their own artwork but not to their
+    // own label, so both announced themselves as idle: the states the
+    // direct hooks exist to surface were the ones going unnamed.
+    try std.testing.expectEqualStrings("Agent failed", flockSemanticLabel(.failed));
+    try std.testing.expectEqualStrings("Agent reading", flockSemanticLabel(.review));
+    try std.testing.expectEqualStrings("Agent blocked", flockSemanticLabel(.waiting));
+    try std.testing.expectEqualStrings("Agent working", flockSemanticLabel(.running));
+    try std.testing.expectEqualStrings("Agent idle", flockSemanticLabel(.idle));
+}
+
+test "a body earns the marker when a human has to act" {
+    try std.testing.expect(flockNeedsAttention(.waiting));
+    try std.testing.expect(flockNeedsAttention(.failed));
+    try std.testing.expect(!flockNeedsAttention(.running));
+    try std.testing.expect(!flockNeedsAttention(.idle));
+    try std.testing.expect(!flockNeedsAttention(.review));
+}
+
+test "flock states use distinct cells in one atlas" {
+    for (flock_states, 0..) |state, index| {
+        try std.testing.expectEqual(flock_atlas_image_id, flockImageId(state));
+        try std.testing.expectEqual(@as(f32, @floatFromInt(index)) * frame_w, flockImageRect(state).x);
+    }
+    try std.testing.expect(flock_atlas_image_id != sheet_image_id);
+    try std.testing.expect(flock_atlas_image_id != agent_icon_atlas_id);
+    try std.testing.expect(flock_atlas_image_id != thumb_atlas_id);
+    try std.testing.expect(flock_atlas_image_id != avatar_image_id);
+    try std.testing.expect(flock_atlas_image_id != tail_image_id);
 }
 
 test "one image slot covers every agent" {
@@ -4735,14 +5390,35 @@ test "cached update versions restore the correct phase" {
     var model: Model = .{};
     updateCachePhase(&model);
     try std.testing.expectEqual(updates.Phase.idle, model.update_phase);
+    @memcpy(model.latest_version[0.."0.10.0".len], "0.10.0");
+    model.latest_version_len = "0.10.0".len;
+    updateCachePhase(&model);
+    try std.testing.expectEqual(updates.Phase.available, model.update_phase);
     @memcpy(model.latest_version[0.."0.9.0".len], "0.9.0");
     model.latest_version_len = "0.9.0".len;
     updateCachePhase(&model);
-    try std.testing.expectEqual(updates.Phase.available, model.update_phase);
-    @memcpy(model.latest_version[0.."0.8.0".len], "0.8.0");
-    model.latest_version_len = "0.8.0".len;
-    updateCachePhase(&model);
     try std.testing.expectEqual(updates.Phase.current, model.update_phase);
+}
+
+test "tray exposes website active pet and updater commands" {
+    try std.testing.expectEqual(std.meta.Tag(Msg).open_website, std.meta.activeTag(onCommand("petdex.website").?));
+    try std.testing.expectEqual(std.meta.Tag(Msg).open_active_pet_page, std.meta.activeTag(onCommand("petdex.pet-page").?));
+    try std.testing.expectEqual(std.meta.Tag(Msg).check_updates, std.meta.activeTag(onCommand("petdex.updates").?));
+
+    var model: Model = .{};
+    var scratch: PetdexApp.StatusItemScratch = .{};
+    var state = petdexStatusItem(&model, &scratch);
+    try std.testing.expectEqual(@as(usize, 11), state.items.len);
+    try std.testing.expectEqualStrings("Open petdex.dev", state.items[1].label);
+    try std.testing.expectEqualStrings("Show Flock", state.items[5].label);
+    try std.testing.expectEqualStrings("View Pet on Petdex", state.items[6].label);
+    try std.testing.expect(std.mem.startsWith(u8, state.items[8].label, "Check for Updates"));
+
+    model.update_phase = .available;
+    @memcpy(model.latest_version[0.."0.10.0".len], "0.10.0");
+    model.latest_version_len = "0.10.0".len;
+    state = petdexStatusItem(&model, &scratch);
+    try std.testing.expectEqualStrings("Update to Petdex 0.10.0…", state.items[8].label);
 }
 
 test "bubble text default is its own value, not the range floor" {
