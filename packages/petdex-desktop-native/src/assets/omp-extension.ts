@@ -114,7 +114,6 @@ type Notify = {
   status?: "idle" | "running" | "needs_input" | "completed" | "failed";
   messageKind?: "status" | "prompt" | "tool" | "lifecycle";
   eventKind?: string;
-  agentState?: string;
   requestId?: string;
   resolvesRequestId?: string;
 };
@@ -152,7 +151,6 @@ async function notify({
   status,
   messageKind,
   eventKind,
-  agentState,
   requestId,
   resolvesRequestId,
 }: Notify): Promise<void> {
@@ -182,7 +180,10 @@ async function notify({
   if (status) bubbleBody.status = status;
   if (messageKind) bubbleBody.message_kind = messageKind;
   if (eventKind) bubbleBody.event_kind = eventKind;
-  if (agentState) bubbleBody.agent_state = agentState;
+  // Every bubble replaces the per-card state. In particular, the first event
+  // after a tool error must overwrite "failed" instead of leaving the Flock
+  // body stuck in its failure sprite.
+  bubbleBody.agent_state = state;
   if (requestId) bubbleBody.request_id = requestId;
   if (resolvesRequestId) bubbleBody.resolves_request_id = resolvesRequestId;
   bubbleBody.feed_source = "hook";
@@ -332,13 +333,12 @@ export default function petdex(pi: ExtensionAPI): void {
         status: "running",
         messageKind: "tool",
         eventKind: "tool-failure",
-        agentState: "failed",
         sessionId,
       });
       return;
     }
     await notify({
-      state: "idle",
+      state: "running",
       text: describeTool(event?.toolName ?? "", event?.input ?? {}, true),
       title: titleFor(sessionId),
       busy: true,

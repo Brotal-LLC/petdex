@@ -1380,15 +1380,29 @@ fn publishProvider(watch: *ProviderWatch, event: ProviderEvent) void {
     if (event.status == .completed or event.status == .failed) watch.used = false;
 }
 
-fn findProviderWatch(watcher: *Watcher, adapter_index: u8, path: []const u8) ?*ProviderWatch {
-    for (&watcher.provider_watches) |*watch|
-        if (watch.used and watch.adapter_index == adapter_index and std.mem.eql(u8, watch.pathSlice(), path)) return watch;
+/// Active watches and unchanged terminal tombstones both suppress discovery.
+/// A terminal event keeps its bounded path/stamp after releasing the live
+/// watch slot, preventing the same recent multi-megabyte transcript from being
+/// reparsed every two seconds. A changed stamp clears the tombstone so a file
+/// that legitimately resumes can be admitted again.
+fn findProviderWatch(watcher: *Watcher, adapter_index: u8, path: []const u8, size: u64, mtime_ms: i64) ?*ProviderWatch {
+    for (&watcher.provider_watches) |*watch| {
+        if (watch.adapter_index != adapter_index or !std.mem.eql(u8, watch.pathSlice(), path)) continue;
+        if (watch.used or (watch.size == size and watch.mtime_ms == mtime_ms)) return watch;
+        watch.* = .{};
+        return null;
+    }
     return null;
 }
 
 fn freeProviderWatch(watcher: *Watcher) ?*ProviderWatch {
-    for (&watcher.provider_watches) |*watch| if (!watch.used) return watch;
-    return null;
+    var tombstone: ?*ProviderWatch = null;
+    for (&watcher.provider_watches) |*watch| {
+        if (watch.used) continue;
+        if (watch.path_len == 0) return watch;
+        if (tombstone == null) tombstone = watch;
+    }
+    return tombstone;
 }
 
 const ProviderDiscoveryResult = struct { added: bool = false, budget_exhausted: bool = false };
@@ -1427,7 +1441,7 @@ fn discoverProviders(watcher: *Watcher, io: std.Io, now_ms: i64) ProviderDiscove
     inline for (.{ false, true }) |subagents| {
         for (selected[0..selected_len]) |item| {
             const candidate = item.candidate;
-            if (findProviderWatch(watcher, item.adapter_index, candidate.pathSlice()) != null) continue;
+            if (findProviderWatch(watcher, item.adapter_index, candidate.pathSlice(), candidate.size, candidate.mtime_ms) != null) continue;
             const event = parseProviderFile(io, watcher.allocator, adapters[item.adapter_index], candidate.pathSlice()) orelse continue;
             if (event.subagent != subagents or !providerInitialPublishable(event, candidate.mtime_ms, now_ms)) continue;
             const slot = freeProviderWatch(watcher) orelse return result;
@@ -2281,14 +2295,33 @@ test "candidate admission seeds every detected provider before noisy recency" {
 
 test "terminal subagent provider watches release their slots" {
     var event: ProviderEvent = .{ .status = .completed, .subagent = true };
-    var watch: ProviderWatch = .{ .used = true, .adapter_index = 0 };
+    var watch: ProviderWatch = .{ .used = true, .adapter_index = 0, .size = 4096, .mtime_ms = 42 };
+    setBounded(&watch.path, &watch.path_len, "claude/child.jsonl");
     publishProvider(&watch, event);
     try std.testing.expect(!watch.used);
+    try std.testing.expectEqualStrings("claude/child.jsonl", watch.pathSlice());
+    try std.testing.expectEqual(@as(u64, 4096), watch.size);
+    try std.testing.expectEqual(@as(i64, 42), watch.mtime_ms);
 
     event.status = .running;
     watch = .{ .used = true, .adapter_index = 0 };
     publishProvider(&watch, event);
     try std.testing.expect(watch.used);
+}
+
+test "unchanged terminal provider tombstones suppress rediscovery" {
+    var watcher: Watcher = .{ .allocator = std.testing.allocator, .home = "" };
+    const terminal = &watcher.provider_watches[0];
+    terminal.* = .{ .adapter_index = 2, .size = 4096, .mtime_ms = 42 };
+    setBounded(&terminal.path, &terminal.path_len, "gemini/child.jsonl");
+
+    try std.testing.expect(findProviderWatch(&watcher, 2, "gemini/child.jsonl", 4096, 42) == terminal);
+    // Prefer a genuinely empty slot so tombstones survive until capacity is
+    // actually needed.
+    try std.testing.expect(freeProviderWatch(&watcher) == &watcher.provider_watches[1]);
+
+    try std.testing.expect(findProviderWatch(&watcher, 2, "gemini/child.jsonl", 4100, 43) == null);
+    try std.testing.expectEqual(@as(usize, 0), watcher.provider_watches[0].path_len);
 }
 
 test "Hermes portable schema distinguishes continuations workers input and failure" {

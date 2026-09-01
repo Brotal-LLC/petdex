@@ -3088,7 +3088,9 @@ test "omp install writes the extension where OMP discovers it" {
     try t.expect(std.mem.indexOf(u8, written, "export default function") != null);
     // Failure comes from isError on tool_result, not from parsing text.
     try t.expect(std.mem.indexOf(u8, written, "isError") != null);
-    try t.expect(std.mem.indexOf(u8, written, "agentState: \"failed\"") != null);
+    // Every later bubble overwrites a temporary failed state, so a successful
+    // tool result or terminal event cannot leave the Flock body stuck.
+    try t.expect(std.mem.indexOf(u8, written, "bubbleBody.agent_state = state") != null);
     // Each OMP event must identify its conversation so concurrent sessions
     // remain separate in the desktop mailbox.
     try t.expect(std.mem.indexOf(u8, written, "session_id") != null);
