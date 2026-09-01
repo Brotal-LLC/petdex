@@ -669,7 +669,7 @@ if [ -n "$text" ] && $post_bubble; then
     [ -n "$notification_kind" ] && metadata="$metadata,\"notification_kind\":\"$notification_kind\""
     source_cwd=$(text_field cwd 240)
     [ -n "$source_cwd" ] && metadata="$metadata,\"source_cwd\":\"$source_cwd\""
-    hostname=$(hostname 2>/dev/null | head -n 1 | tr -cd 'A-Za-z0-9._-')
+    hostname=$(sed -n '1p' "$HOME/.petdex/runtime/remote-host" 2>/dev/null | tr -cd 'A-Za-z0-9_-')
     [ -n "$hostname" ] && metadata="$metadata,\"hostname\":\"$hostname\""
     turn_id=$(id_field turn_id)
     [ -n "$turn_id" ] && metadata="$metadata,\"turn_id\":\"$turn_id\""

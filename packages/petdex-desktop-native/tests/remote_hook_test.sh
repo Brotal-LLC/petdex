@@ -6,6 +6,7 @@ fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' 0 1 2 15
 mkdir -p "$fixture/home/.petdex/runtime" "$fixture/bin"
 printf 'test-token\n' > "$fixture/home/.petdex/runtime/update-token"
+printf 'configured-alias\n' > "$fixture/home/.petdex/runtime/remote-host"
 python3_path=$(command -v python3 || true)
 if [ -n "$python3_path" ]; then
     test_path="$(dirname "$python3_path"):/usr/bin:/bin"
@@ -44,6 +45,7 @@ printf '%s' "$payload" | HOME="$fixture/home" PATH="$fixture/bin:$test_path" \
 grep -Eq '"session_id":"[0-9a-f]{64}"' "$fixture/capture"
 grep -q '"source_session_id":"raw-turn"' "$fixture/capture"
 grep -q '"session_kind":"primary"' "$fixture/capture"
+grep -q '"hostname":"configured-alias"' "$fixture/capture"
 
 # A host may keep the stdin write end open after the JSON is complete. The
 # remote hook must return within its bounded drain window instead of waiting

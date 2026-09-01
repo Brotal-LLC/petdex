@@ -275,5 +275,25 @@ class WatcherOwnershipTests(unittest.TestCase):
                     release.join()
 
 
+class RemoteIdentityTests(unittest.TestCase):
+    def test_watchers_publish_the_configured_remote_principal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            remote_host = Path(directory) / "remote-host"
+            remote_host.write_text("configured-alias\n", encoding="utf-8")
+            watchers = []
+            for name, filename in (
+                ("codex_remote_identity_test", "petdex-codex-watch.py"),
+                ("hermes_remote_identity_test", "petdex-hermes-watch.py"),
+            ):
+                watcher = load(name, filename)
+                watcher.REMOTE_HOST = remote_host
+                watchers.append(watcher)
+                self.assertEqual("configured-alias", watcher.remote_hostname())
+
+            remote_host.unlink()
+            for watcher in watchers:
+                self.assertEqual("", watcher.remote_hostname())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -201,6 +201,26 @@ pub const StateEvent = struct {
     }
 };
 
+/// Stable bubble identity shared by producers and every consumer that keeps
+/// per-conversation state. Provider conversation ids are scoped by agent and
+/// locality; remote identities are additionally scoped by configured host.
+pub const BubbleIdentity = struct {
+    conversation_key: []const u8,
+    agent: []const u8,
+    hostname: []const u8,
+    remote: bool,
+
+    pub fn matches(self: BubbleIdentity, other: BubbleIdentity) bool {
+        if (!std.mem.eql(u8, self.conversation_key, other.conversation_key)) return false;
+        // Empty is the compatibility slot used by pre-session integrations.
+        if (other.conversation_key.len == 0) return true;
+        if (self.remote != other.remote) return false;
+        if (!std.ascii.eqlIgnoreCase(self.agent, other.agent)) return false;
+        if (!other.remote) return true;
+        return std.ascii.eqlIgnoreCase(self.hostname, other.hostname);
+    }
+};
+
 pub const Bubble = struct {
     text: [bubble_text_capacity]u8 = @splat(0),
     text_len: usize = 0,
@@ -243,9 +263,9 @@ pub const Bubble = struct {
     source_cwd_len: usize = 0,
     herdr_pane: [64]u8 = @splat(0),
     herdr_pane_len: usize = 0,
-    /// Machine that owns the agent process. Local hooks report the Mac's
-    /// hostname; SSH hooks report the remote host, so the header never has
-    /// to infer locality from a filesystem path.
+    /// Machine identity that owns the agent process. Local hooks report the
+    /// Mac's hostname; authenticated SSH hooks report their configured remote
+    /// principal, so the header never infers locality from a filesystem path.
     hostname: [64]u8 = @splat(0),
     hostname_len: usize = 0,
     /// Active agent turn. Codex requires both thread + turn ids for a safe
@@ -302,20 +322,20 @@ pub const Bubble = struct {
         return self.message_id[0..self.message_id_len];
     }
 
+    pub fn identity(self: *const Bubble) BubbleIdentity {
+        return .{
+            .conversation_key = self.sessionSlice(),
+            .agent = self.agent[0..self.agent_len],
+            .hostname = self.hostnameSlice(),
+            .remote = self.remote,
+        };
+    }
+
     /// The canonical identity used by both mailbox producers and the app
     /// consumer. Conversation ids are only unique within an agent/locality
     /// boundary, and remote ids are additionally scoped to their host.
     pub fn sameIdentity(self: *const Bubble, other: *const Bubble) bool {
-        return bubbleIdentityPartsMatch(
-            self.sessionSlice(),
-            self.agent[0..self.agent_len],
-            self.hostnameSlice(),
-            self.remote,
-            other.sessionSlice(),
-            other.agent[0..other.agent_len],
-            other.hostnameSlice(),
-            other.remote,
-        );
+        return self.identity().matches(other.identity());
     }
 };
 
@@ -361,27 +381,13 @@ fn copyField(destination: []u8, source: []const u8) usize {
     return count;
 }
 
-fn bubbleIdentityPartsMatch(left_conversation: []const u8, left_agent: []const u8, left_hostname: []const u8, left_remote: bool, right_conversation: []const u8, right_agent: []const u8, right_hostname: []const u8, right_remote: bool) bool {
-    if (!std.mem.eql(u8, left_conversation, right_conversation)) return false;
-    // Empty is the compatibility slot used by pre-session integrations.
-    if (right_conversation.len == 0) return true;
-    if (left_remote != right_remote) return false;
-    if (!std.ascii.eqlIgnoreCase(left_agent, right_agent)) return false;
-    if (!right_remote) return true;
-    return std.ascii.eqlIgnoreCase(left_hostname, right_hostname);
-}
-
 fn identityMatches(bubble: *const Bubble, update: BubbleUpdate) bool {
-    return bubbleIdentityPartsMatch(
-        bubble.sessionSlice(),
-        bubble.agent[0..bubble.agent_len],
-        bubble.hostnameSlice(),
-        bubble.remote,
-        update.conversation_key,
-        update.agent,
-        update.hostname,
-        update.remote,
-    );
+    return bubble.identity().matches(.{
+        .conversation_key = update.conversation_key,
+        .agent = update.agent,
+        .hostname = update.hostname,
+        .remote = update.remote,
+    });
 }
 
 /// Match a provisional card opened under a raw child id before its provider
@@ -903,10 +909,21 @@ pub const Mailbox = struct {
     /// knows the state calls this right after, and one that does not
     /// leaves the field empty for readers to fall back on `busy`.
     pub fn setBubbleAgentState(self: *Mailbox, session: []const u8, state: []const u8) void {
+        self.setBubbleAgentStateIdentity(session, state, "", "", false, false);
+    }
+
+    pub fn setBubbleAgentStateIdentity(self: *Mailbox, conversation: []const u8, state: []const u8, agent: []const u8, hostname: []const u8, remote: bool, exact: bool) void {
         self.mutex.lock();
         defer self.mutex.unlock();
         for (self.bubbles[0..self.bubbles_len]) |*b| {
-            if (!std.mem.eql(u8, b.sessionSlice(), session)) continue;
+            if (exact) {
+                if (!b.identity().matches(.{
+                    .conversation_key = conversation,
+                    .agent = agent,
+                    .hostname = hostname,
+                    .remote = remote,
+                })) continue;
+            } else if (!std.mem.eql(u8, b.sessionSlice(), conversation)) continue;
             const n = @min(state.len, b.agent_state.len);
             @memcpy(b.agent_state[0..n], state[0..n]);
             @memset(b.agent_state[n..], 0);
@@ -1795,7 +1812,7 @@ fn route(server: *Server, conn: *Conn, method: []const u8, target: []const u8, p
             .title_source = TitleSource.fromWire(title_source),
             .feed_source = .hook,
         });
-        if (safe_agent_state.len > 0) mailbox.setBubbleAgentState(conversation, safe_agent_state);
+        if (safe_agent_state.len > 0) mailbox.setBubbleAgentStateIdentity(conversation, safe_agent_state, safe_agent, safe_hostname, remote, true);
         const mirror_busy = if (status) |value| value == .running else busy;
         mirrorBubble(server, capped, counter, safe_title, safe_agent, safe_hostname, mirror_busy) catch {};
         const out = std.fmt.bufPrint(&scratch, "{{\"ok\":true,\"counter\":{d}}}", .{counter}) catch return;
@@ -2534,6 +2551,29 @@ test "canonical identity includes agent locality and remote host" {
 
     var out: [max_bubbles]Bubble = @splat(.{});
     try std.testing.expectEqual(@as(?usize, 3), mb.takeBubbles(&out));
+}
+
+test "agent state targets the full bubble identity" {
+    var mb: Mailbox = .{};
+    inline for (.{
+        BubbleUpdate{ .conversation_key = "shared", .source_session = "a", .agent = "codex", .hostname = "host-a", .remote = true, .text = "A" },
+        BubbleUpdate{ .conversation_key = "shared", .source_session = "b", .agent = "codex", .hostname = "host-b", .remote = true, .text = "B" },
+        BubbleUpdate{ .conversation_key = "shared", .source_session = "c", .agent = "hermes", .hostname = "host-a", .remote = true, .text = "C" },
+    }) |update| _ = mb.applyBubbleUpdate(update);
+
+    mb.setBubbleAgentStateIdentity("shared", "waiting", "codex", "host-b", true, true);
+    mb.setBubbleAgentStateIdentity("shared", "failed", "hermes", "host-a", true, true);
+    var out: [max_bubbles]Bubble = @splat(.{});
+    try std.testing.expectEqual(@as(?usize, 3), mb.takeBubbles(&out));
+    for (out[0..3]) |*bubble| {
+        if (std.mem.eql(u8, bubble.agent[0..bubble.agent_len], "hermes")) {
+            try std.testing.expectEqualStrings("failed", bubble.agentStateSlice());
+        } else if (std.mem.eql(u8, bubble.hostnameSlice(), "host-b")) {
+            try std.testing.expectEqualStrings("waiting", bubble.agentStateSlice());
+        } else {
+            try std.testing.expectEqual(@as(usize, 0), bubble.agent_state_len);
+        }
+    }
 }
 
 test "authoritative subagent update retracts provisional child card" {
