@@ -3207,6 +3207,7 @@ pub fn applyBubbleJson(target: *Mailbox, body: []const u8, feed_source: FeedSour
     const origin_app = plat.OriginApplication.fromTermProgram(source_app);
     const source_tty = plat.safeSourceTty(request.string("source_tty")) orelse "";
     const source_cwd = plat.safeSourceCwd(request.string("source_cwd")) orelse "";
+    const herdr_pane = plat.safeHerdrPaneId(request.string("herdr_pane_id")) orelse "";
     const hostname = boundedUtf8(request.string("hostname") orelse "", 64) orelse return null;
     const turn = boundedUtf8(request.string("turn_id") orelse "", 64) orelse return null;
     const message_id = boundedUtf8(request.string("message_id") orelse "", bubble_message_id_capacity) orelse return null;
@@ -3216,6 +3217,7 @@ pub fn applyBubbleJson(target: *Mailbox, body: []const u8, feed_source: FeedSour
     const notification_kind = boundedUtf8(request.string("notification_kind") orelse "", 64) orelse return null;
     const parent_session = request.string("parent_session_id") orelse "";
     const subagent_label = boundedUtf8(request.string("subagent_label") orelse "", 48) orelse return null;
+    const agent_state = boundedUtf8(request.string("agent_state") orelse "", 16) orelse return null;
     const remote = request.boolean("remote") orelse false;
     const busy = request.boolean("busy") orelse false;
     var conversation_hash: [64]u8 = undefined;
@@ -3228,7 +3230,7 @@ pub fn applyBubbleJson(target: *Mailbox, body: []const u8, feed_source: FeedSour
     const title_source = request.string("title_source") orelse "unknown";
     _ = request.string("feed_source");
     if (!request.valid) return null;
-    return target.applyBubbleUpdate(.{
+    const counter = target.applyBubbleUpdate(.{
         .conversation_key = conversation[0..@min(conversation.len, bubble_session_capacity)],
         .source_session = source_session,
         .parent_session = parent_session,
@@ -3238,6 +3240,7 @@ pub fn applyBubbleJson(target: *Mailbox, body: []const u8, feed_source: FeedSour
         .origin_app = origin_app,
         .source_tty = source_tty,
         .source_cwd = source_cwd,
+        .herdr_pane = herdr_pane,
         .hostname = hostname,
         .turn = turn,
         .message_id = message_id,
@@ -3254,6 +3257,8 @@ pub fn applyBubbleJson(target: *Mailbox, body: []const u8, feed_source: FeedSour
         .title_source = TitleSource.fromWire(title_source),
         .feed_source = feed_source,
     });
+    if (agent_state.len > 0) target.setBubbleAgentStateIdentity(conversation, agent_state, agent, hostname, remote, true);
+    return counter;
 }
 
 test "journal lowering decodes escaped Unicode and preserves UTF-8 boundaries" {
@@ -3266,6 +3271,25 @@ test "journal lowering decodes escaped Unicode and preserves UTF-8 boundaries" {
     try std.testing.expectEqualStrings("quote: \" slash: \\ line: \n smile: ☺ 🙂", out[0].text[0..out[0].text_len]);
     try std.testing.expectEqualStrings("id-☺", out[0].message_id[0..out[0].message_id_len]);
     try std.testing.expect(std.unicode.utf8ValidateSlice(out[0].text[0..out[0].text_len]));
+}
+
+test "journal lowering preserves bounded agent state and safe Herdr pane identity" {
+    var mb: Mailbox = .{};
+    const body =
+        "{\"text\":\"Reviewing changes\",\"agent_source\":\"hermes\",\"conversation_key\":\"review-root\",\"source_session_id\":\"review-root\",\"herdr_pane_id\":\"w1:p5\",\"agent_state\":\"review\",\"busy\":true,\"status\":\"running\"}";
+    try std.testing.expect(applyBubbleJson(&mb, body, .journal) != null);
+
+    var out: [max_bubbles]Bubble = @splat(.{});
+    try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
+    try std.testing.expectEqualStrings("w1:p5", out[0].herdrPaneSlice());
+    try std.testing.expectEqualStrings("review", out[0].agentStateSlice());
+
+    const unsafe =
+        "{\"text\":\"Unsafe pane\",\"agent_source\":\"hermes\",\"conversation_key\":\"unsafe-root\",\"source_session_id\":\"unsafe-root\",\"herdr_pane_id\":\"w1:p5;open\",\"agent_state\":\"waiting\"}";
+    try std.testing.expect(applyBubbleJson(&mb, unsafe, .journal) != null);
+    try std.testing.expectEqual(@as(?usize, 2), mb.takeBubbles(&out));
+    try std.testing.expectEqual(@as(usize, 0), out[1].herdr_pane_len);
+    try std.testing.expectEqualStrings("waiting", out[1].agentStateSlice());
 }
 
 test "journal lowering hashes long source identities before bounded storage" {
