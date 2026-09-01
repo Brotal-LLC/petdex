@@ -363,6 +363,10 @@ pub const BubbleUpdate = struct {
     event_kind: []const u8 = "",
     request_id: []const u8 = "",
     resolves_request_id: []const u8 = "",
+    /// The provider has authoritative state but no request-level correlation.
+    /// A running update carrying this flag releases only the unkeyed fallback;
+    /// keyed approvals remain protected until their exact resolution arrives.
+    resolves_unkeyed_input: bool = false,
     notification_kind: []const u8 = "",
     subagent_label: []const u8 = "",
     remote: bool = false,
@@ -599,6 +603,10 @@ fn removePendingInput(bubble: *Bubble, index: usize) void {
 
 fn reconcileStatus(bubble: *Bubble, update: BubbleUpdate, proposed: SessionStatus) SessionStatus {
     const key = pendingInputKey(update);
+    // A provider may resolve one request while another remains outstanding,
+    // so correlation is independent of the aggregate status it publishes.
+    const resolving_key = if (update.resolves_request_id.len > 0) update.resolves_request_id else "";
+    if (pendingInputIndex(bubble, resolving_key)) |index| removePendingInput(bubble, index);
     switch (proposed) {
         .failed, .completed, .idle => clearPendingInputs(bubble),
         .needs_input => {
@@ -612,11 +620,7 @@ fn reconcileStatus(bubble: *Bubble, update: BubbleUpdate, proposed: SessionStatu
             }
         },
         .running => {
-            const resolving_key = if (update.resolves_request_id.len > 0) update.resolves_request_id else "";
-            if (pendingInputIndex(bubble, resolving_key)) |index| {
-                removePendingInput(bubble, index);
-            }
-            if (bubble.pending_unkeyed_input and isDefinitiveResume(update))
+            if (bubble.pending_unkeyed_input and (update.resolves_unkeyed_input or isDefinitiveResume(update)))
                 bubble.pending_unkeyed_input = false;
             // A genuinely new turn invalidates even keyed requests from the
             // previous turn. Ordinary tool/assistant progress only resolves
@@ -3023,11 +3027,12 @@ test "pending inputs obey attention precedence until matching responses arrive" 
         .conversation_key = "thread",
         .source_session = "thread",
         .agent = "codex",
-        .text = "Continuing",
-        .message_id = "approval-1",
+        .text = "Choose a host",
+        .message_id = "question-2",
+        .request_id = "question-2",
         .resolves_request_id = "approval-1",
-        .message_kind = .status,
-        .status = .running,
+        .message_kind = .prompt,
+        .status = .needs_input,
     });
     var out: [max_bubbles]Bubble = @splat(.{});
     try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
@@ -3114,6 +3119,32 @@ test "definitive tool progress clears only the unkeyed fallback" {
     try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
     try std.testing.expectEqual(SessionStatus.running, out[0].status);
     try std.testing.expect(!out[0].pending_unkeyed_input);
+}
+
+test "authoritative unkeyed resolution never clears a keyed approval" {
+    var mb: Mailbox = .{};
+    _ = mb.applyBubbleUpdate(.{
+        .conversation_key = "thread",
+        .source_session = "thread",
+        .agent = "hermes",
+        .text = "Approve?",
+        .request_id = "approval-1",
+        .message_kind = .prompt,
+        .status = .needs_input,
+    });
+    _ = mb.applyBubbleUpdate(.{
+        .conversation_key = "thread",
+        .source_session = "thread",
+        .agent = "hermes",
+        .text = "Recovered provider progress",
+        .resolves_unkeyed_input = true,
+        .message_kind = .status,
+        .status = .running,
+    });
+    var out: [max_bubbles]Bubble = @splat(.{});
+    try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
+    try std.testing.expectEqual(SessionStatus.needs_input, out[0].status);
+    try std.testing.expectEqual(@as(usize, 1), out[0].pending_input_ids_len);
 }
 
 test "a sessionless agent keeps the single shared slot" {

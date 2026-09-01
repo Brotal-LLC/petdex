@@ -192,6 +192,40 @@ const Pending = struct {
     }
 };
 
+const CorrelationId = struct {
+    bytes: [hook_server.bubble_message_id_capacity]u8 = @splat(0),
+    len: usize = 0,
+
+    fn slice(self: *const CorrelationId) []const u8 {
+        return self.bytes[0..self.len];
+    }
+
+    fn set(self: *CorrelationId, value: []const u8) void {
+        self.* = .{};
+        self.len = @min(value.len, self.bytes.len);
+        @memcpy(self.bytes[0..self.len], value[0..self.len]);
+        while (self.len > 0 and !std.unicode.utf8ValidateSlice(self.bytes[0..self.len])) self.len -= 1;
+    }
+};
+
+const CorrelationIds = struct {
+    entries: [8]CorrelationId = @splat(.{}),
+    len: usize = 0,
+
+    fn append(self: *CorrelationIds, value: []const u8) void {
+        if (value.len == 0) return;
+        for (self.entries[0..self.len]) |*entry| {
+            if (std.mem.eql(u8, entry.slice(), value)) return;
+        }
+        if (self.len == self.entries.len) {
+            std.mem.copyForwards(CorrelationId, self.entries[0 .. self.len - 1], self.entries[1..self.len]);
+            self.len -= 1;
+        }
+        self.entries[self.len].set(value);
+        self.len += 1;
+    }
+};
+
 const RolloutState = struct {
     status: Status = .idle,
     text: SmallText = .{},
@@ -201,6 +235,7 @@ const RolloutState = struct {
     lifecycle: bool = false,
     subagent: bool = false,
     pending: [8]Pending = @splat(.{}),
+    resolved: CorrelationIds = .{},
 
     fn removePendingAt(self: *RolloutState, index: usize) void {
         var cursor = index;
@@ -235,14 +270,15 @@ const RolloutState = struct {
         entry.text.set(prompt);
     }
 
-    fn resolvePending(self: *RolloutState, id: []const u8) void {
+    fn resolvePending(self: *RolloutState, id: []const u8) bool {
         for (&self.pending, 0..) |*entry, index| {
-            if (!entry.active) return;
+            if (!entry.active) return false;
             if (std.mem.eql(u8, entry.idSlice(), id)) {
                 self.removePendingAt(index);
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     fn newestPending(self: *const RolloutState) ?*const Pending {
@@ -260,6 +296,12 @@ const Event = struct {
     title: TitleText,
     cwd: CwdText,
     busy: bool,
+    request_id: CorrelationId = .{},
+    resolved: CorrelationIds = .{},
+
+    fn requestIdSlice(self: *const Event) []const u8 {
+        return self.request_id.slice();
+    }
 
     fn terminal(self: *const Event) bool {
         return self.status == .completed or self.status == .failed;
@@ -270,6 +312,12 @@ const Event = struct {
         hash.update(self.text.slice());
         hash.update(self.title.slice());
         hash.update(self.cwd.slice());
+        hash.update(std.mem.asBytes(&self.request_id.len));
+        hash.update(self.requestIdSlice());
+        for (self.resolved.entries[0..self.resolved.len]) |*entry| {
+            hash.update(std.mem.asBytes(&entry.len));
+            hash.update(entry.slice());
+        }
         hash.update(&.{ @intFromEnum(self.status), @intFromBool(self.busy) });
         return hash.final();
     }
@@ -1591,7 +1639,11 @@ fn publishHermes(watcher: *Watcher, event: ProviderEvent, initial: bool) void {
         seen.digest = digest;
         if (terminal) seen.used = false;
     }
-    _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(.{
+    _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(hermesBubbleUpdate(&event));
+}
+
+fn hermesBubbleUpdate(event: *const ProviderEvent) hook_server.BubbleUpdate {
+    return .{
         .conversation_key = if (event.subagent) event.parentSlice() else event.sessionSlice(),
         .source_session = event.sessionSlice(),
         .parent_session = event.parentSlice(),
@@ -1599,6 +1651,7 @@ fn publishHermes(watcher: *Watcher, event: ProviderEvent, initial: bool) void {
         .agent = "hermes",
         .title = event.title.slice(),
         .message_id = event.messageIdSlice(),
+        .resolves_unkeyed_input = !event.subagent and event.status == .running,
         .event_kind = if (event.subagent) "subagent" else "native-store",
         .subagent_label = event.labelSlice(),
         .busy = event.status == .running,
@@ -1613,7 +1666,7 @@ fn publishHermes(watcher: *Watcher, event: ProviderEvent, initial: bool) void {
         .message_kind = if (event.subagent) .assistant else .status,
         .title_source = .server,
         .feed_source = .native_store,
-    });
+    };
 }
 
 fn sqliteMillis(value: f64) i64 {
@@ -1664,7 +1717,10 @@ fn hermesEventFromRow(row: HermesRow) ProviderEvent {
     var id_buf: [64]u8 = undefined;
     const modified_ms = if (row.activity_ms > 0) row.activity_ms else row.started_ms;
     const message_id = std.fmt.bufPrint(&id_buf, "hermes-{d}", .{modified_ms}) catch "";
-    setBounded(&event.message_id, &event.message_id_len, message_id);
+    // Hermes exposes attention as session state, not a request/response pair.
+    // Leaving this update unkeyed lets the next authoritative running row
+    // release it without pretending the row timestamp is a correlation id.
+    if (!needs_input) setBounded(&event.message_id, &event.message_id_len, message_id);
     if (subagent) setBounded(&event.label, &event.label_len, row.title);
     return event;
 }
@@ -1875,6 +1931,7 @@ fn applyEnvelope(state: *RolloutState, root: std.json.Value, arena: std.mem.Allo
         state.text.set("");
         state.message_kind = .status;
         state.pending = @splat(.{});
+        state.resolved = .{};
         return;
     }
     if (std.mem.eql(u8, event_type, "task_complete")) {
@@ -1922,7 +1979,9 @@ fn applyEnvelope(state: *RolloutState, root: std.json.Value, arena: std.mem.Allo
     }
     if (std.mem.eql(u8, outer, "response_item") and (std.mem.eql(u8, event_type, "function_call_output") or std.mem.eql(u8, event_type, "custom_tool_call_output"))) {
         const id = valueString(payload, "call_id") orelse valueString(payload, "id") orelse "";
-        state.resolvePending(id);
+        if (state.resolvePending(id)) {
+            state.resolved.append(id);
+        }
         if (state.newestPending() == null and state.status == .needs_input) {
             state.status = .running;
             state.text.set("Thinking…");
@@ -1958,10 +2017,12 @@ fn parseRolloutBytes(allocator: std.mem.Allocator, prefix: []const u8, tail: []c
         applyEnvelope(&state, root, arena.allocator());
     }
     if (state.subagent) return null;
+    var request_id: CorrelationId = .{};
     if (state.newestPending()) |pending| {
         state.status = .needs_input;
         state.text = pending.text;
         state.message_kind = .prompt;
+        request_id.set(pending.idSlice());
     } else if (!state.lifecycle) {
         if (state.text.len == 0) return null;
         state.status = .running;
@@ -1975,6 +2036,8 @@ fn parseRolloutBytes(allocator: std.mem.Allocator, prefix: []const u8, tail: []c
         .title = resolved_title,
         .cwd = state.cwd,
         .busy = state.status == .running,
+        .request_id = request_id,
+        .resolved = state.resolved,
     };
 }
 
@@ -2004,16 +2067,16 @@ fn freeWatch(watcher: *Watcher) ?*Watch {
     return null;
 }
 
-fn publish(watch: *Watch, event: Event) void {
-    const digest = event.digest();
-    if (!watch.force and digest == watch.delivered) return;
-    _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(.{
+fn codexBubbleUpdate(watch: *const Watch, event: *const Event, resolves_request_id: []const u8) hook_server.BubbleUpdate {
+    return .{
         .conversation_key = watch.sessionSlice(),
         .source_session = watch.sessionSlice(),
         .text = event.text.slice(),
         .agent = "codex",
         .title = event.title.slice(),
         .source_cwd = event.cwd.slice(),
+        .request_id = event.requestIdSlice(),
+        .resolves_request_id = resolves_request_id,
         .busy = event.busy,
         .status = switch (event.status) {
             .idle => .idle,
@@ -2028,7 +2091,19 @@ fn publish(watch: *Watch, event: Event) void {
         },
         .title_source = if (watch.title.len > 0) .server else .prompt,
         .feed_source = .native_store,
-    });
+    };
+}
+
+fn publish(watch: *Watch, event: Event) void {
+    const digest = event.digest();
+    if (!watch.force and digest == watch.delivered) return;
+    if (event.resolved.len == 0) {
+        _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(codexBubbleUpdate(watch, &event, ""));
+    } else {
+        for (event.resolved.entries[0..event.resolved.len]) |*resolved| {
+            _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(codexBubbleUpdate(watch, &event, resolved.slice()));
+        }
+    }
     watch.delivered = digest;
     watch.force = false;
     if (event.terminal()) watch.used = false;
@@ -2107,24 +2182,57 @@ test "pending input survives initial reconciliation and resolves" {
     try std.testing.expectEqual(Status.needs_input, event.status);
     try std.testing.expect(!event.busy);
     try std.testing.expectEqualStrings("Choose one?", event.text.slice());
+    try std.testing.expectEqualStrings("q1", event.requestIdSlice());
 
-    const resolved = waiting ++
+    const resolved = waiting ++ "\n" ++
         \\{"type":"response_item","payload":{"type":"function_call_output","call_id":"q1"}}
         \\{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Finished"}}
     ;
     const done = parseRolloutBytes(std.testing.allocator, resolved, resolved, "").?;
     try std.testing.expectEqual(Status.completed, done.status);
     try std.testing.expectEqualStrings("Finished", done.text.slice());
+    try std.testing.expectEqual(@as(usize, 1), done.resolved.len);
+    try std.testing.expectEqualStrings("q1", done.resolved.entries[0].slice());
+}
+
+test "Codex rollout recovery publishes the matched approval resolution" {
+    const waiting_rollout =
+        \\{"type":"event_msg","payload":{"type":"task_started"}}
+        \\{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"approval-1","arguments":"{\"questions\":[{\"question\":\"Approve deployment?\"}]}"}}
+    ;
+    const waiting = parseRolloutBytes(std.testing.allocator, waiting_rollout, waiting_rollout, "").?;
+
+    var watch: Watch = .{};
+    setBounded(&watch.session, &watch.session_len, "codex-session");
+    var mailbox: hook_server.Mailbox = .{};
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(codexBubbleUpdate(&watch, &waiting, ""));
+    try std.testing.expectEqual(hook_server.SessionStatus.needs_input, mailbox.bubbles[0].status);
+    try std.testing.expectEqual(@as(usize, 1), mailbox.bubbles[0].pending_input_ids_len);
+    try std.testing.expectEqualStrings("waiting", mailbox.bubbles[0].agentStateSlice());
+
+    const resumed_rollout = waiting_rollout ++ "\n" ++
+        \\{"type":"response_item","payload":{"type":"function_call_output","call_id":"approval-1"}}
+    ;
+    const resumed = parseRolloutBytes(std.testing.allocator, resumed_rollout, resumed_rollout, "").?;
+    try std.testing.expectEqual(Status.running, resumed.status);
+    try std.testing.expectEqual(@as(usize, 1), resumed.resolved.len);
+    const resolution = resumed.resolved.entries[0].slice();
+    try std.testing.expectEqualStrings("approval-1", resolution);
+
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(codexBubbleUpdate(&watch, &resumed, resolution));
+    try std.testing.expectEqual(hook_server.SessionStatus.running, mailbox.bubbles[0].status);
+    try std.testing.expectEqual(@as(usize, 0), mailbox.bubbles[0].pending_input_ids_len);
+    try std.testing.expectEqualStrings("running", mailbox.bubbles[0].agentStateSlice());
 }
 
 test "resolving an older request keeps later pending prompts ordered" {
     var state: RolloutState = .{};
     state.setPending("q1", "First question");
     state.setPending("q2", "Second question");
-    state.resolvePending("q1");
+    try std.testing.expect(state.resolvePending("q1"));
     state.setPending("q3", "Newest question");
     try std.testing.expectEqualStrings("Newest question", state.newestPending().?.text.slice());
-    state.resolvePending("q3");
+    try std.testing.expect(state.resolvePending("q3"));
     try std.testing.expectEqualStrings("Second question", state.newestPending().?.text.slice());
 }
 
@@ -2134,7 +2242,7 @@ test "updating a pending request moves it to the newest position" {
     state.setPending("q2", "Second question");
     state.setPending("q1", "Updated first question");
     try std.testing.expectEqualStrings("Updated first question", state.newestPending().?.text.slice());
-    state.resolvePending("q1");
+    try std.testing.expect(state.resolvePending("q1"));
     try std.testing.expectEqualStrings("Second question", state.newestPending().?.text.slice());
 }
 
@@ -2550,6 +2658,26 @@ test "Hermes versioned row fixture lowers through SQLite row adapter and publica
     try std.testing.expectEqual(Status.needs_input, waiting.status);
     try std.testing.expectEqualStrings("Choose a deployment target", waiting.text.slice());
     try std.testing.expectEqual(@as(usize, 0), waiting.request_id_len);
+    try std.testing.expectEqual(@as(usize, 0), waiting.message_id_len);
+
+    var mailbox: hook_server.Mailbox = .{};
+    const waiting_update = hermesBubbleUpdate(&waiting);
+    try std.testing.expect(!waiting_update.resolves_unkeyed_input);
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(waiting_update);
+    try std.testing.expectEqual(hook_server.SessionStatus.needs_input, mailbox.bubbles[0].status);
+    try std.testing.expect(mailbox.bubbles[0].pending_unkeyed_input);
+    try std.testing.expectEqual(@as(usize, 0), mailbox.bubbles[0].pending_input_ids_len);
+
+    var resumed_row = waiting_parsed.value;
+    resumed_row.activity_ms += 1;
+    resumed_row.description = "Planning deployment";
+    const resumed = hermesEventFromRow(resumed_row);
+    const resumed_update = hermesBubbleUpdate(&resumed);
+    try std.testing.expect(resumed_update.resolves_unkeyed_input);
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(resumed_update);
+    try std.testing.expectEqual(hook_server.SessionStatus.running, mailbox.bubbles[0].status);
+    try std.testing.expect(!mailbox.bubbles[0].pending_unkeyed_input);
+    try std.testing.expectEqualStrings("running", mailbox.bubbles[0].agentStateSlice());
 
     const parsed = try std.json.parseFromSlice(HermesRow, std.testing.allocator, @embedFile("test-fixtures/session-reconcile/v1/hermes.json"), .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
