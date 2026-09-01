@@ -512,6 +512,22 @@ fn bubblePresentationEquivalent(before: Bubble, after: Bubble) bool {
     return std.meta.eql(left, right);
 }
 
+fn agentStateForStatus(status: SessionStatus) []const u8 {
+    return switch (status) {
+        .running => "running",
+        .needs_input => "waiting",
+        .failed => "failed",
+        .idle, .completed => "",
+    };
+}
+
+fn writeBubbleAgentState(bubble: *Bubble, state: []const u8) void {
+    const n = @min(state.len, bubble.agent_state.len);
+    @memcpy(bubble.agent_state[0..n], state[0..n]);
+    @memset(bubble.agent_state[n..], 0);
+    bubble.agent_state_len = n;
+}
+
 fn pendingInputKey(update: BubbleUpdate) []const u8 {
     if (update.request_id.len > 0) return update.request_id;
     return update.message_id;
@@ -866,6 +882,17 @@ pub const Mailbox = struct {
     }
 
     pub fn applyBubbleUpdate(self: *Mailbox, update_raw: BubbleUpdate) u64 {
+        return self.applyBubbleUpdateInternal(update_raw, false);
+    }
+
+    /// Recovery feeds know lifecycle but not a separate hook phase. Derive
+    /// their Flock state from the status actually accepted by reconciliation,
+    /// in the same canonical-identity critical section as the bubble update.
+    pub fn applyBubbleUpdateWithDerivedAgentState(self: *Mailbox, update_raw: BubbleUpdate) u64 {
+        return self.applyBubbleUpdateInternal(update_raw, true);
+    }
+
+    fn applyBubbleUpdateInternal(self: *Mailbox, update_raw: BubbleUpdate, derive_agent_state: bool) u64 {
         var conversation_hash: [64]u8 = undefined;
         var source_hash: [64]u8 = undefined;
         var parent_hash: [64]u8 = undefined;
@@ -1002,6 +1029,8 @@ pub const Mailbox = struct {
             // a stale-running marker that could interfere with a later turn.
             slot.stale_running_suppressed = false;
         }
+
+        if (derive_agent_state) writeBubbleAgentState(slot, agentStateForStatus(status));
 
         const changed = is_new or sessionless_replace or meaningful_running_activity or
             !bubblePresentationEquivalent(before, slot.*);

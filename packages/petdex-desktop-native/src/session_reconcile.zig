@@ -1369,40 +1369,11 @@ fn providerBubbleUpdate(adapter: AgentSessionAdapter, event: *const ProviderEven
     };
 }
 
-fn recoveredAgentState(status: Status) []const u8 {
-    return switch (status) {
-        .running => "running",
-        .needs_input => "waiting",
-        .failed => "failed",
-        .idle, .completed => "",
-    };
-}
-
-/// Native stores are authoritative recovery evidence for both the bubble
-/// lifecycle and its Flock body. Lower them together so a missed hook cannot
-/// leave an older failed/review sprite attached to progress or completion.
-/// Child events only contribute prose to their parent and must never replace
-/// the parent's own attention state.
-fn applyRecoveredBubble(target: *hook_server.Mailbox, update: hook_server.BubbleUpdate, status: Status) u64 {
-    const counter = target.applyBubbleUpdate(update);
-    if (update.session_kind == .primary) {
-        target.setBubbleAgentStateIdentity(
-            update.conversation_key,
-            recoveredAgentState(status),
-            update.agent,
-            update.hostname,
-            update.remote,
-            true,
-        );
-    }
-    return counter;
-}
-
 fn publishProvider(watch: *ProviderWatch, event: ProviderEvent) void {
     const digest = event.digest();
     if (digest == watch.delivered) return;
     const adapter = adapters[watch.adapter_index];
-    _ = applyRecoveredBubble(&hook_server.mailbox, providerBubbleUpdate(adapter, &event), event.status);
+    _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(providerBubbleUpdate(adapter, &event));
     watch.delivered = digest;
     if (event.status == .completed or event.status == .failed) watch.used = false;
 }
@@ -1620,7 +1591,7 @@ fn publishHermes(watcher: *Watcher, event: ProviderEvent, initial: bool) void {
         seen.digest = digest;
         if (terminal) seen.used = false;
     }
-    _ = applyRecoveredBubble(&hook_server.mailbox, .{
+    _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(.{
         .conversation_key = if (event.subagent) event.parentSlice() else event.sessionSlice(),
         .source_session = event.sessionSlice(),
         .parent_session = event.parentSlice(),
@@ -1642,7 +1613,7 @@ fn publishHermes(watcher: *Watcher, event: ProviderEvent, initial: bool) void {
         .message_kind = if (event.subagent) .assistant else .status,
         .title_source = .server,
         .feed_source = .native_store,
-    }, event.status);
+    });
 }
 
 fn sqliteMillis(value: f64) i64 {
@@ -2036,7 +2007,7 @@ fn freeWatch(watcher: *Watcher) ?*Watch {
 fn publish(watch: *Watch, event: Event) void {
     const digest = event.digest();
     if (!watch.force and digest == watch.delivered) return;
-    _ = applyRecoveredBubble(&hook_server.mailbox, .{
+    _ = hook_server.mailbox.applyBubbleUpdateWithDerivedAgentState(.{
         .conversation_key = watch.sessionSlice(),
         .source_session = watch.sessionSlice(),
         .text = event.text.slice(),
@@ -2057,7 +2028,7 @@ fn publish(watch: *Watch, event: Event) void {
         },
         .title_source = if (watch.title.len > 0) .server else .prompt,
         .feed_source = .native_store,
-    }, event.status);
+    });
     watch.delivered = digest;
     watch.force = false;
     if (event.terminal()) watch.used = false;
@@ -2288,92 +2259,97 @@ test "renamed and multiple active rollouts keep one stable mailbox slot per sess
     try std.testing.expectEqualStrings("session-beta", mailbox.bubbles[1].sessionSlice());
 }
 
-test "native store recovery replaces primary Flock state for every lifecycle" {
+test "native store recovery derives Flock state from canonical reconciled lifecycle" {
     var mailbox: hook_server.Mailbox = .{};
-    const identity = hook_server.BubbleIdentity{
-        .conversation_key = "recovered-primary",
-        .agent = "claude-code",
-        .hostname = "",
-        .remote = false,
-    };
+    const raw_identity = "provider/session/with:unsafe/components/and/a/conversation-key-longer-than-the-mailbox-storage-boundary/recovered-primary";
+    const agent = "claude-code";
 
     _ = mailbox.applyBubbleUpdate(.{
-        .conversation_key = identity.conversation_key,
-        .source_session = identity.conversation_key,
-        .text = "Hook is reviewing",
-        .agent = identity.agent,
-        .busy = true,
-        .status = .running,
-        .message_kind = .assistant,
-        .feed_source = .hook,
-    });
-    mailbox.setBubbleAgentStateIdentity(identity.conversation_key, "review", identity.agent, identity.hostname, identity.remote, true);
-
-    _ = applyRecoveredBubble(&mailbox, .{
-        .conversation_key = identity.conversation_key,
-        .source_session = identity.conversation_key,
-        .text = "Waiting for you…",
-        .agent = identity.agent,
+        .conversation_key = raw_identity,
+        .source_session = raw_identity,
+        .text = "Approve the recovered action",
+        .agent = agent,
+        .request_id = "approval-1",
         .busy = false,
         .status = .needs_input,
         .message_kind = .prompt,
-        .feed_source = .native_store,
-    }, .needs_input);
-    try std.testing.expectEqual(hook_server.SessionStatus.needs_input, mailbox.bubbles[0].status);
-    try std.testing.expectEqualStrings("waiting", mailbox.bubbles[0].agentStateSlice());
+        .feed_source = .hook,
+    });
+    try std.testing.expectEqual(@as(usize, std.crypto.hash.sha2.Sha256.digest_length * 2), mailbox.bubbles[0].session_len);
+    try std.testing.expect(!std.mem.eql(u8, raw_identity, mailbox.bubbles[0].sessionSlice()));
+    mailbox.setBubbleAgentStateIdentity(mailbox.bubbles[0].sessionSlice(), "review", agent, "", false, true);
 
-    _ = applyRecoveredBubble(&mailbox, .{
-        .conversation_key = identity.conversation_key,
-        .source_session = identity.conversation_key,
-        .text = "Recovered progress",
-        .agent = identity.agent,
-        .message_id = "assistant-2",
+    // Generic progress cannot resolve a keyed approval. The recovered state
+    // must follow the accepted needs_input status, not the proposed running
+    // status, and must find the normalized long provider identity.
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(.{
+        .conversation_key = raw_identity,
+        .source_session = raw_identity,
+        .text = "Recovered progress without approval correlation",
+        .agent = agent,
+        .message_id = "assistant-1",
         .event_kind = "native-store",
         .busy = true,
         .status = .running,
         .message_kind = .assistant,
         .feed_source = .native_store,
-    }, .running);
+    });
+    try std.testing.expectEqual(hook_server.SessionStatus.needs_input, mailbox.bubbles[0].status);
+    try std.testing.expectEqualStrings("waiting", mailbox.bubbles[0].agentStateSlice());
+
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(.{
+        .conversation_key = raw_identity,
+        .source_session = raw_identity,
+        .text = "Recovered progress",
+        .agent = agent,
+        .message_id = "assistant-2",
+        .resolves_request_id = "approval-1",
+        .event_kind = "native-store",
+        .busy = true,
+        .status = .running,
+        .message_kind = .assistant,
+        .feed_source = .native_store,
+    });
     try std.testing.expectEqual(hook_server.SessionStatus.running, mailbox.bubbles[0].status);
     try std.testing.expectEqualStrings("running", mailbox.bubbles[0].agentStateSlice());
 
-    _ = applyRecoveredBubble(&mailbox, .{
-        .conversation_key = identity.conversation_key,
-        .source_session = identity.conversation_key,
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(.{
+        .conversation_key = raw_identity,
+        .source_session = raw_identity,
         .text = "Session failed.",
-        .agent = identity.agent,
+        .agent = agent,
         .busy = false,
         .status = .failed,
         .feed_source = .native_store,
-    }, .failed);
+    });
     try std.testing.expectEqualStrings("failed", mailbox.bubbles[0].agentStateSlice());
 
-    _ = applyRecoveredBubble(&mailbox, .{
-        .conversation_key = identity.conversation_key,
-        .source_session = identity.conversation_key,
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(.{
+        .conversation_key = raw_identity,
+        .source_session = raw_identity,
         .text = "Done.",
-        .agent = identity.agent,
+        .agent = agent,
         .busy = false,
         .status = .completed,
         .feed_source = .native_store,
-    }, .completed);
+    });
     try std.testing.expectEqual(hook_server.SessionStatus.completed, mailbox.bubbles[0].status);
     try std.testing.expectEqual(@as(usize, 0), mailbox.bubbles[0].agent_state_len);
 
-    mailbox.setBubbleAgentStateIdentity(identity.conversation_key, "review", identity.agent, identity.hostname, identity.remote, true);
-    _ = applyRecoveredBubble(&mailbox, .{
-        .conversation_key = identity.conversation_key,
+    mailbox.setBubbleAgentStateIdentity(mailbox.bubbles[0].sessionSlice(), "review", agent, "", false, true);
+    _ = mailbox.applyBubbleUpdateWithDerivedAgentState(.{
+        .conversation_key = raw_identity,
         .source_session = "recovered-child",
-        .parent_session = identity.conversation_key,
+        .parent_session = raw_identity,
         .text = "Child summary",
-        .agent = identity.agent,
+        .agent = agent,
         .message_id = "child-1",
         .busy = false,
         .status = .completed,
         .session_kind = .subagent,
         .message_kind = .assistant,
         .feed_source = .native_store,
-    }, .completed);
+    });
     try std.testing.expectEqualStrings("review", mailbox.bubbles[0].agentStateSlice());
 }
 
