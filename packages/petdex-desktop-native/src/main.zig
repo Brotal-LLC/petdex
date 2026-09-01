@@ -4067,7 +4067,14 @@ fn expireBubbles(model: *Model, now_ms: i64) bool {
         if (bubbleLifetimeExpired(model.bubble_expires_at_ms[i], now_ms, model.state)) {
             // Tell the server too: a slot the app stopped drawing must
             // not keep a session alive against the eviction policy.
-            hook_server.mailbox.dropBubble(model.bubbles[i].sessionSlice());
+            const expired = &model.bubbles[i];
+            hook_server.mailbox.dropBubbleIdentity(
+                expired.sessionSlice(),
+                expired.agent[0..expired.agent_len],
+                expired.hostnameSlice(),
+                expired.remote,
+                true,
+            );
             dropped = true;
             continue;
         }
@@ -4093,7 +4100,7 @@ fn syncBubbleDeadlines(model: *Model, previous: []const hook_server.Bubble, prev
         const fresh = bubbleExpiryMs(now_ms, model.bubble_lifetime_secs, model.bubbles[i].busy);
         model.bubble_expires_at_ms[i] = fresh;
         for (previous, previous_deadlines) |old, deadline| {
-            if (!std.mem.eql(u8, old.sessionSlice(), model.bubbles[i].sessionSlice())) continue;
+            if (!old.sameIdentity(&model.bubbles[i])) continue;
             if (old.counter == model.bubbles[i].counter) model.bubble_expires_at_ms[i] = deadline;
             break;
         }
@@ -6649,6 +6656,31 @@ test "expiry drops only the bubbles past their deadline" {
     try std.testing.expect(!expireBubbles(&model, 6000));
 }
 
+test "expiry drops only the matching agent and remote host" {
+    hook_server.mailbox.clearBubbles();
+    defer hook_server.mailbox.clearBubbles();
+    _ = hook_server.mailbox.setBubbleWithContext("shared", "Host A", "codex", "", .none, "", "", "host-a", "", true, false);
+    _ = hook_server.mailbox.setBubbleWithContext("shared", "Host B", "codex", "", .none, "", "", "host-b", "", true, false);
+    // Updating A leaves it in the first mailbox slot but makes B the oldest
+    // rendered card after the consumer's counter sort.
+    _ = hook_server.mailbox.setBubbleWithContext("shared", "Host A newest", "codex", "", .none, "", "", "host-a", "", true, false);
+
+    var drained: [hook_server.max_bubbles]hook_server.Bubble = @splat(.{});
+    const count = hook_server.mailbox.takeBubbles(&drained).?;
+    try std.testing.expectEqual(@as(usize, 2), count);
+    sortBubblesByCounter(drained[0..count]);
+    try std.testing.expectEqualStrings("host-b", drained[0].hostnameSlice());
+
+    var model: Model = .{};
+    @memcpy(model.bubbles[0..count], drained[0..count]);
+    model.bubbles_len = count;
+    model.bubble_expires_at_ms[0] = 5_000;
+    model.bubble_expires_at_ms[1] = 9_000;
+    try std.testing.expect(expireBubbles(&model, 6_000));
+    try std.testing.expectEqual(@as(usize, 1), hook_server.mailbox.bubbles_len);
+    try std.testing.expectEqualStrings("host-a", hook_server.mailbox.bubbles[0].hostnameSlice());
+}
+
 test "an unchanged bubble keeps its deadline when another one updates" {
     var model: Model = .{};
     model.bubble_lifetime_secs = 5;
@@ -6662,4 +6694,36 @@ test "an unchanged bubble keeps its deadline when another one updates" {
     syncBubbleDeadlines(&model, previous[0..2], previous_deadlines[0..2], 10_000);
     try std.testing.expectEqual(@as(i64, 4000), model.bubble_expires_at_ms[0]);
     try std.testing.expectEqual(@as(i64, 15_000), model.bubble_expires_at_ms[1]);
+}
+
+test "deadline reconciliation matches the full bubble identity" {
+    var model: Model = .{};
+    model.bubble_lifetime_secs = 5;
+    testPushBubble(&model, "shared", "Host A", false, 4_000);
+    testPushBubble(&model, "shared", "Host B", false, 5_000);
+    testPushBubble(&model, "shared", "Hermes A", false, 6_000);
+    const identities = [_]struct { agent: []const u8, hostname: []const u8 }{
+        .{ .agent = "codex", .hostname = "host-a" },
+        .{ .agent = "codex", .hostname = "host-b" },
+        .{ .agent = "hermes", .hostname = "host-a" },
+    };
+    for (identities, 0..) |identity, i| {
+        model.bubbles[i].agent_len = identity.agent.len;
+        @memcpy(model.bubbles[i].agent[0..identity.agent.len], identity.agent);
+        model.bubbles[i].hostname_len = identity.hostname.len;
+        @memcpy(model.bubbles[i].hostname[0..identity.hostname.len], identity.hostname);
+        model.bubbles[i].remote = true;
+    }
+    const previous = model.bubbles;
+    const previous_deadlines = model.bubble_expires_at_ms;
+
+    // A fresh mailbox drain may arrive in a different order from the prior
+    // rendered stack. Each unchanged sibling must retain its own lease.
+    model.bubbles[0] = previous[2];
+    model.bubbles[1] = previous[1];
+    model.bubbles[2] = previous[0];
+    syncBubbleDeadlines(&model, previous[0..3], previous_deadlines[0..3], 10_000);
+    try std.testing.expectEqual(@as(i64, 6_000), model.bubble_expires_at_ms[0]);
+    try std.testing.expectEqual(@as(i64, 5_000), model.bubble_expires_at_ms[1]);
+    try std.testing.expectEqual(@as(i64, 4_000), model.bubble_expires_at_ms[2]);
 }

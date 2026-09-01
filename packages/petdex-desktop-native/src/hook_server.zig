@@ -301,6 +301,22 @@ pub const Bubble = struct {
     pub fn messageIdSlice(self: *const Bubble) []const u8 {
         return self.message_id[0..self.message_id_len];
     }
+
+    /// The canonical identity used by both mailbox producers and the app
+    /// consumer. Conversation ids are only unique within an agent/locality
+    /// boundary, and remote ids are additionally scoped to their host.
+    pub fn sameIdentity(self: *const Bubble, other: *const Bubble) bool {
+        return bubbleIdentityPartsMatch(
+            self.sessionSlice(),
+            self.agent[0..self.agent_len],
+            self.hostnameSlice(),
+            self.remote,
+            other.sessionSlice(),
+            other.agent[0..other.agent_len],
+            other.hostnameSlice(),
+            other.remote,
+        );
+    }
 };
 
 /// How many conversations can narrate at once. Fixed because the
@@ -345,14 +361,27 @@ fn copyField(destination: []u8, source: []const u8) usize {
     return count;
 }
 
-fn identityMatches(bubble: *const Bubble, update: BubbleUpdate) bool {
-    if (!std.mem.eql(u8, bubble.sessionSlice(), update.conversation_key)) return false;
+fn bubbleIdentityPartsMatch(left_conversation: []const u8, left_agent: []const u8, left_hostname: []const u8, left_remote: bool, right_conversation: []const u8, right_agent: []const u8, right_hostname: []const u8, right_remote: bool) bool {
+    if (!std.mem.eql(u8, left_conversation, right_conversation)) return false;
     // Empty is the compatibility slot used by pre-session integrations.
-    if (update.conversation_key.len == 0) return true;
-    if (bubble.remote != update.remote) return false;
-    if (!std.ascii.eqlIgnoreCase(bubble.agent[0..bubble.agent_len], update.agent)) return false;
-    if (!update.remote) return true;
-    return std.ascii.eqlIgnoreCase(bubble.hostnameSlice(), update.hostname);
+    if (right_conversation.len == 0) return true;
+    if (left_remote != right_remote) return false;
+    if (!std.ascii.eqlIgnoreCase(left_agent, right_agent)) return false;
+    if (!right_remote) return true;
+    return std.ascii.eqlIgnoreCase(left_hostname, right_hostname);
+}
+
+fn identityMatches(bubble: *const Bubble, update: BubbleUpdate) bool {
+    return bubbleIdentityPartsMatch(
+        bubble.sessionSlice(),
+        bubble.agent[0..bubble.agent_len],
+        bubble.hostnameSlice(),
+        bubble.remote,
+        update.conversation_key,
+        update.agent,
+        update.hostname,
+        update.remote,
+    );
 }
 
 /// Match a provisional card opened under a raw child id before its provider

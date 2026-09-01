@@ -1348,7 +1348,7 @@ fn publishProvider(watch: *ProviderWatch, event: ProviderEvent) void {
     const adapter = adapters[watch.adapter_index];
     _ = hook_server.mailbox.applyBubbleUpdate(providerBubbleUpdate(adapter, &event));
     watch.delivered = digest;
-    if (!event.subagent and (event.status == .completed or event.status == .failed)) watch.used = false;
+    if (event.status == .completed or event.status == .failed) watch.used = false;
 }
 
 fn findProviderWatch(watcher: *Watcher, adapter_index: u8, path: []const u8) ?*ProviderWatch {
@@ -1615,6 +1615,15 @@ fn hermesEventFromRow(row: HermesRow) ProviderEvent {
     return event;
 }
 
+const sqlite_row: c_int = 100;
+const sqlite_done: c_int = 101;
+
+fn commitHermesStampAfterScan(watcher: *Watcher, stamp: u64, step_result: c_int) bool {
+    if (step_result != sqlite_done) return false;
+    watcher.hermes_db_stamp = stamp;
+    return true;
+}
+
 fn reconcileHermes(watcher: *Watcher, io: std.Io, now_ms: i64, force: bool) void {
     if (comptime builtin.target.os.tag != .windows and builtin.target.os.tag != .macos and builtin.target.os.tag != .linux) return;
     const root_owned: ?[]u8 = if (env_hermes_home) |configured|
@@ -1633,7 +1642,6 @@ fn reconcileHermes(watcher: *Watcher, io: std.Io, now_ms: i64, force: bool) void
     defer watcher.allocator.free(wal_path);
     if (fileInfo(io, wal_path)) |wal| stamp ^= wal.size *% 1099511628211 ^ @as(u64, @bitCast(wal.mtime_ms));
     if (!force and watcher.hermes_db_stamp == stamp) return;
-    watcher.hermes_db_stamp = stamp;
 
     var api = SqliteApi.load() orelse return;
     defer api.lib.close();
@@ -1671,7 +1679,15 @@ fn reconcileHermes(watcher: *Watcher, io: std.Io, now_ms: i64, force: bool) void
     var raw_ids: [max_recent][hook_server.bubble_session_capacity]u8 = @splat(@splat(0));
     var raw_id_lens: [max_recent]usize = @splat(0);
     var len: usize = 0;
-    while (len < events.len and api.step(statement) == 100) {
+    while (true) {
+        const step_result = api.step(statement);
+        if (step_result != sqlite_row) {
+            if (!commitHermesStampAfterScan(watcher, stamp, step_result)) return;
+            break;
+        }
+        // Both queries are currently bounded to max_recent, but retain this
+        // guard if their SQL limit changes before the fixed storage does.
+        if (len == events.len) continue;
         const raw_id = sqliteText(&api, statement, 0);
         if (raw_id.len == 0) continue;
         const session_key = sqliteText(&api, statement, 1);
@@ -2187,6 +2203,18 @@ test "candidate admission seeds every detected provider before noisy recency" {
     try std.testing.expectEqual(@as(u8, 0), selected[adapters.len].adapter_index);
 }
 
+test "terminal subagent provider watches release their slots" {
+    var event: ProviderEvent = .{ .status = .completed, .subagent = true };
+    var watch: ProviderWatch = .{ .used = true, .adapter_index = 0 };
+    publishProvider(&watch, event);
+    try std.testing.expect(!watch.used);
+
+    event.status = .running;
+    watch = .{ .used = true, .adapter_index = 0 };
+    publishProvider(&watch, event);
+    try std.testing.expect(watch.used);
+}
+
 test "Hermes portable schema distinguishes continuations workers input and failure" {
     // A documented parent_session_id can be a compression continuation; it
     // is not a delegated worker without an explicit source/config marker.
@@ -2198,6 +2226,15 @@ test "Hermes portable schema distinguishes continuations workers input and failu
     try std.testing.expectEqual(Status.needs_input, hermesSessionStatus(false, true, ""));
     try std.testing.expectEqual(Status.completed, hermesSessionStatus(true, false, "complete"));
     try std.testing.expectEqual(Status.failed, hermesSessionStatus(true, false, "interrupted"));
+}
+
+test "Hermes DB stamp advances only after a completed SQLite scan" {
+    var watcher: Watcher = .{ .allocator = std.testing.allocator, .home = "" };
+    watcher.hermes_db_stamp = 17;
+    try std.testing.expect(!commitHermesStampAfterScan(&watcher, 42, 5));
+    try std.testing.expectEqual(@as(u64, 17), watcher.hermes_db_stamp);
+    try std.testing.expect(commitHermesStampAfterScan(&watcher, 42, sqlite_done));
+    try std.testing.expectEqual(@as(u64, 42), watcher.hermes_db_stamp);
 }
 
 const ProviderFixtureCase = struct {
