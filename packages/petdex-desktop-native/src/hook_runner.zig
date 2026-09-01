@@ -261,7 +261,11 @@ fn statusForEvent(phase: []const u8, tool_name: ?[]const u8, notification_kind: 
     // correlated request and therefore cannot make the session orange.
     if (std.mem.eql(u8, phase, "waiting")) return .idle;
     if (std.mem.eql(u8, phase, "pre") and tool_name != null and asciiEqlLower(tool_name.?, "clarify")) return .needs_input;
-    if (isToolFailurePhase(phase)) return .failed;
+    // A failed tool is an intermediate event: the harness reports the error
+    // back to the agent and the same turn continues. Keep the conversation
+    // active while `stateForEvent` independently drives the brief failed
+    // sprite.
+    if (isToolFailurePhase(phase)) return .running;
     if (isStopPhase(phase) or std.mem.eql(u8, phase, "assistant")) return .completed;
     if (isPromptPhase(phase) or
         std.mem.eql(u8, phase, "pre") or
@@ -349,6 +353,41 @@ const BubbleWireContext = struct {
     agent_state: ?[]const u8 = null,
 };
 
+fn jsonEscapeString(value: []const u8, output: []u8) ?[]const u8 {
+    var len: usize = 0;
+    for (value) |byte| {
+        const escape: ?u8 = switch (byte) {
+            '"' => '"',
+            '\\' => '\\',
+            '\n' => 'n',
+            '\r' => 'r',
+            '\t' => 't',
+            else => null,
+        };
+        if (escape) |escaped| {
+            if (len + 2 > output.len) return null;
+            output[len] = '\\';
+            output[len + 1] = escaped;
+            len += 2;
+        } else if (byte < 0x20) {
+            if (len + 6 > output.len) return null;
+            const hex = "0123456789abcdef";
+            output[len] = '\\';
+            output[len + 1] = 'u';
+            output[len + 2] = '0';
+            output[len + 3] = '0';
+            output[len + 4] = hex[@as(usize, byte >> 4)];
+            output[len + 5] = hex[@as(usize, byte & 0x0f)];
+            len += 6;
+        } else {
+            if (len >= output.len) return null;
+            output[len] = byte;
+            len += 1;
+        }
+    }
+    return output[0..len];
+}
+
 fn bubbleBodyWithContext(out: []u8, text: []const u8, title: []const u8, busy: bool, agent: []const u8, context: BubbleWireContext) ?[]const u8 {
     var title_buf: [256]u8 = undefined;
     const title_part: []const u8 = if (title.len > 0)
@@ -367,6 +406,11 @@ fn bubbleBodyWithContext(out: []u8, text: []const u8, title: []const u8, busy: b
     const message_id = context.message_id orelse "";
     const request_id = context.request_id orelse "";
     const resolves_request_id = context.resolves_request_id orelse "";
+    // Unlike provider-derived fields, source_cwd is a decoded environment
+    // value. Windows paths therefore contain literal backslashes and must be
+    // escaped before this format string becomes JSON.
+    var source_cwd_buf: [3072]u8 = undefined;
+    const source_cwd = jsonEscapeString(context.source_cwd, &source_cwd_buf) orelse return null;
     const session_kind = if (context.session_kind == .subagent) "subagent" else "primary";
     const has_canonical_context = conversation.len > 0 or parent.len > 0 or
         context.session_kind == .subagent or context.subagent_label.len > 0 or
@@ -376,7 +420,7 @@ fn bubbleBodyWithContext(out: []u8, text: []const u8, title: []const u8, busy: b
         resolves_request_id.len > 0 or context.notification_kind.len > 0 or context.message_kind != .status or
         context.title_source != .unknown or context.status != .idle;
     const context_part: []const u8 = if (has_canonical_context)
-        (std.fmt.bufPrint(&context_buf, ",\"conversation_key\":\"{s}\",\"source_session_id\":\"{s}\",\"parent_session_id\":\"{s}\",\"session_kind\":\"{s}\",\"subagent_label\":\"{s}\",\"source_app\":\"{s}\",\"source_tty\":\"{s}\",\"source_cwd\":\"{s}\",\"herdr_pane_id\":\"{s}\",\"hostname\":\"{s}\",\"turn_id\":\"{s}\",\"message_id\":\"{s}\",\"event_kind\":\"{s}\",\"request_id\":\"{s}\",\"resolves_request_id\":\"{s}\",\"notification_kind\":\"{s}\",\"message_kind\":\"{s}\",\"title_source\":\"{s}\",\"feed_source\":\"hook\",\"status\":\"{s}\"", .{ conversation, context.session_id orelse "", parent, session_kind, context.subagent_label, context.source_app, context.source_tty, context.source_cwd, context.herdr_pane, context.hostname, turn, message_id, context.event_kind, request_id, resolves_request_id, context.notification_kind, @tagName(context.message_kind), @tagName(context.title_source), context.status.wireName() }) catch return null)
+        (std.fmt.bufPrint(&context_buf, ",\"conversation_key\":\"{s}\",\"source_session_id\":\"{s}\",\"parent_session_id\":\"{s}\",\"session_kind\":\"{s}\",\"subagent_label\":\"{s}\",\"source_app\":\"{s}\",\"source_tty\":\"{s}\",\"source_cwd\":\"{s}\",\"herdr_pane_id\":\"{s}\",\"hostname\":\"{s}\",\"turn_id\":\"{s}\",\"message_id\":\"{s}\",\"event_kind\":\"{s}\",\"request_id\":\"{s}\",\"resolves_request_id\":\"{s}\",\"notification_kind\":\"{s}\",\"message_kind\":\"{s}\",\"title_source\":\"{s}\",\"feed_source\":\"hook\",\"status\":\"{s}\"", .{ conversation, context.session_id orelse "", parent, session_kind, context.subagent_label, context.source_app, context.source_tty, source_cwd, context.herdr_pane, context.hostname, turn, message_id, context.event_kind, request_id, resolves_request_id, context.notification_kind, @tagName(context.message_kind), @tagName(context.title_source), context.status.wireName() }) catch return null)
     else
         "";
     var state_buf: [48]u8 = undefined;
@@ -1399,6 +1443,14 @@ test "state mapping keeps post-tool work active until the turn completes" {
     try t.expectEqualStrings("failed", stateForEvent("tool-failure", "Bash").?);
 }
 
+test "tool failures keep the session running while the agent briefly fails" {
+    try t.expectEqual(
+        hook_server.SessionStatus.running,
+        statusForEvent("tool-failure", "Bash", ""),
+    );
+    try t.expectEqualStrings("failed", stateForEvent("tool-failure", "Bash").?);
+}
+
 test "Claude notification types follow the documented attention table" {
     for ([_][]const u8{ "permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input" }) |kind| {
         try t.expectEqual(hook_server.SessionStatus.needs_input, statusForEvent("notification", null, kind));
@@ -1493,6 +1545,33 @@ test "bubble metadata carries the exact Herdr pane id" {
         .herdr_pane = "w1:p5",
     }).?;
     try t.expectEqualStrings("w1:p5", hook_server.jsonStringPub(body, "herdr_pane_id").?);
+}
+
+test "bubble metadata JSON-escapes Windows source paths" {
+    const source_cwd = "C:\\Users\\me\\petdex";
+    var buf: [4096]u8 = undefined;
+    const body = bubbleBodyWithMetadata(
+        &buf,
+        "Running tests",
+        "Fix hooks",
+        true,
+        "claude-code",
+        "session-1",
+        "windows-terminal",
+        "",
+        source_cwd,
+        "",
+        "running",
+    ).?;
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, body, .{});
+    defer parsed.deinit();
+    try t.expectEqualStrings(source_cwd, parsed.value.object.get("source_cwd").?.string);
+
+    // The production reader is strict JSON too; malformed `\U` escapes used
+    // to make this exact body disappear as invalid_json.
+    var mailbox: hook_server.Mailbox = .{};
+    try t.expect(hook_server.applyBubbleJson(&mailbox, body, .hook) != null);
 }
 
 test "bubble metadata carries hostname turn and a safe Codex origin" {
