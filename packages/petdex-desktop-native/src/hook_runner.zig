@@ -271,6 +271,7 @@ fn statusForEvent(phase: []const u8, tool_name: ?[]const u8, notification_kind: 
         std.mem.eql(u8, phase, "pre") or
         std.mem.eql(u8, phase, "post") or
         std.mem.eql(u8, phase, "pre-llm") or
+        std.mem.eql(u8, phase, "post-model") or
         std.mem.eql(u8, phase, "approval-response") or
         std.mem.eql(u8, phase, "subagent-start") or
         std.mem.eql(u8, phase, "subagent-stop")) return .running;
@@ -471,7 +472,7 @@ fn stateForEventWithNotification(phase: []const u8, tool_name: ?[]const u8, noti
     if (std.mem.eql(u8, phase, "approval-request") or
         (std.mem.eql(u8, phase, "notification") and notificationNeedsInput(notification_kind))) return "waiting";
     if (std.mem.eql(u8, phase, "waiting")) return null;
-    if (std.mem.eql(u8, phase, "pre-llm") or std.mem.eql(u8, phase, "subagent-start") or std.mem.eql(u8, phase, "subagent-stop")) return "running";
+    if (std.mem.eql(u8, phase, "pre-llm") or std.mem.eql(u8, phase, "post-model") or std.mem.eql(u8, phase, "subagent-start") or std.mem.eql(u8, phase, "subagent-stop")) return "running";
     return null;
 }
 
@@ -499,7 +500,7 @@ pub fn formatBubble(phase: []const u8, payload: []const u8, out: []u8) ?[]const 
         return null;
     }
     if (std.mem.eql(u8, phase, "assistant")) {
-        const response = firstJsonString(payload, &.{ "assistant_response", "last_assistant_message", "message", "response" }) orelse return "Done.";
+        const response = firstJsonString(payload, &.{ "assistant_response", "last_assistant_message", "prompt_response", "message", "response" }) orelse return "Done.";
         return clipEscaped(response, preview_max, out);
     }
     if (isStopPhase(phase)) {
@@ -1441,6 +1442,17 @@ test "state mapping keeps post-tool work active until the turn completes" {
     try t.expect(stateForEvent("notification", null) == null);
     try t.expectEqualStrings("waiting", stateForEventWithNotification("notification", null, "agent_needs_input").?);
     try t.expectEqualStrings("failed", stateForEvent("tool-failure", "Bash").?);
+    try t.expectEqualStrings("running", stateForEvent("post-model", null).?);
+    try t.expectEqual(hook_server.SessionStatus.running, statusForEvent("post-model", null, ""));
+}
+
+test "Gemini final response uses its documented prompt_response field" {
+    var out: [256]u8 = undefined;
+    try t.expectEqualStrings(
+        "Gemini answer",
+        formatBubble("assistant", "{\"prompt_response\":\"Gemini answer\"}", &out).?,
+    );
+    try t.expect(formatBubble("post-model", "{\"prompt_response\":\"intermediate\"}", &out) == null);
 }
 
 test "tool failures keep the session running while the agent briefly fails" {

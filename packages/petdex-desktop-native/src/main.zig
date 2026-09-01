@@ -1948,6 +1948,7 @@ fn registerFlockFrames(fx: *Effects) void {
 
 const poll_timer_key: u64 = 2;
 const poll_interval_ms: u32 = 100;
+const stale_running_grace_ms: i64 = 30_000;
 const min_dwell_ms: u32 = 250;
 
 /// Transient states whose duration is intrinsic to the animation;
@@ -3166,6 +3167,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             if (!model.sheet_loaded) return;
             if (model.settings_open and thumbs_built < catalog_mod.catalog_len) buildNextThumb(fx);
             const now = fx.wallMs();
+            _ = hook_server.mailbox.suppressStaleRunning(now, stale_running_grace_ms);
             var drained: [hook_server.max_bubbles]hook_server.Bubble = undefined;
             if (hook_server.mailbox.takeBubbles(&drained)) |raw_count| {
                 if (model.settings_open) {

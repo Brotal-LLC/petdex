@@ -674,7 +674,9 @@ const gemini_events = [_]HookEvent{
     .{ .event = "BeforeModel", .phase = "pre-llm" },
     .{ .event = "BeforeTool", .phase = "pre" },
     .{ .event = "AfterTool", .phase = "post" },
-    .{ .event = "AfterModel", .phase = "assistant" },
+    // AfterModel fires for every model response inside the agent loop. Only
+    // AfterAgent marks the final response for the turn.
+    .{ .event = "AfterModel", .phase = "post-model" },
     .{ .event = "AfterAgent", .phase = "assistant" },
     .{ .event = "Notification", .phase = "notification" },
     .{ .event = "SessionEnd", .phase = "stop" },
@@ -2777,6 +2779,17 @@ test "installGemini enables hooks and uses a millisecond timeout" {
     try t.expect(std.mem.indexOf(u8, written, "\"keep\": true") != null);
 }
 
+test "Gemini model responses stay active until AfterAgent" {
+    var after_model_phase: ?[]const u8 = null;
+    var after_agent_phase: ?[]const u8 = null;
+    for (gemini_events) |hook| {
+        if (std.mem.eql(u8, hook.event, "AfterModel")) after_model_phase = hook.phase;
+        if (std.mem.eql(u8, hook.event, "AfterAgent")) after_agent_phase = hook.phase;
+    }
+    try t.expectEqualStrings("post-model", after_model_phase.?);
+    try t.expectEqualStrings("assistant", after_agent_phase.?);
+}
+
 test "legacy curl migration requires the complete Petdex command signature" {
     const command = "T=\"$(cat $HOME/.petdex/runtime/update-token 2>/dev/null)\"; [ -n \"$T\" ] && curl -s -m 0.3 -X POST http://127.0.0.1:7777/state -H \"X-Petdex-Update-Token: $T\"";
     try t.expectEqual(ManagedHookGeneration.legacy, commandGeneration(command));
@@ -3075,6 +3088,7 @@ test "omp install writes the extension where OMP discovers it" {
     try t.expect(std.mem.indexOf(u8, written, "export default function") != null);
     // Failure comes from isError on tool_result, not from parsing text.
     try t.expect(std.mem.indexOf(u8, written, "isError") != null);
+    try t.expect(std.mem.indexOf(u8, written, "agentState: \"failed\"") != null);
     // Each OMP event must identify its conversation so concurrent sessions
     // remain separate in the desktop mailbox.
     try t.expect(std.mem.indexOf(u8, written, "session_id") != null);

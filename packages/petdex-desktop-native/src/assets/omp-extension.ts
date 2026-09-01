@@ -114,6 +114,7 @@ type Notify = {
   status?: "idle" | "running" | "needs_input" | "completed" | "failed";
   messageKind?: "status" | "prompt" | "tool" | "lifecycle";
   eventKind?: string;
+  agentState?: string;
   requestId?: string;
   resolvesRequestId?: string;
 };
@@ -151,6 +152,7 @@ async function notify({
   status,
   messageKind,
   eventKind,
+  agentState,
   requestId,
   resolvesRequestId,
 }: Notify): Promise<void> {
@@ -180,6 +182,7 @@ async function notify({
   if (status) bubbleBody.status = status;
   if (messageKind) bubbleBody.message_kind = messageKind;
   if (eventKind) bubbleBody.event_kind = eventKind;
+  if (agentState) bubbleBody.agent_state = agentState;
   if (requestId) bubbleBody.request_id = requestId;
   if (resolvesRequestId) bubbleBody.resolves_request_id = resolvesRequestId;
   bubbleBody.feed_source = "hook";
@@ -325,10 +328,11 @@ export default function petdex(pi: ExtensionAPI): void {
         duration: 2500,
         text: `${describeTool(event?.toolName ?? "", event?.input ?? {}, true)} failed`,
         title: titleFor(sessionId),
-        busy: false,
-        status: "failed",
+        busy: true,
+        status: "running",
         messageKind: "tool",
         eventKind: "tool-failure",
+        agentState: "failed",
         sessionId,
       });
       return;

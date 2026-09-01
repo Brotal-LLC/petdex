@@ -202,16 +202,33 @@ const RolloutState = struct {
     subagent: bool = false,
     pending: [8]Pending = @splat(.{}),
 
-    fn setPending(self: *RolloutState, id: []const u8, prompt: []const u8) void {
-        var target: ?*Pending = null;
-        for (&self.pending) |*entry| {
-            if (entry.active and std.mem.eql(u8, entry.idSlice(), id)) {
-                target = entry;
-                break;
-            }
-            if (!entry.active and target == null) target = entry;
+    fn removePendingAt(self: *RolloutState, index: usize) void {
+        var cursor = index;
+        while (cursor + 1 < self.pending.len and self.pending[cursor + 1].active) : (cursor += 1) {
+            self.pending[cursor] = self.pending[cursor + 1];
         }
-        const entry = target orelse &self.pending[self.pending.len - 1];
+        self.pending[cursor] = .{};
+    }
+
+    fn setPending(self: *RolloutState, id: []const u8, prompt: []const u8) void {
+        var active_len: usize = 0;
+        var existing: ?usize = null;
+        for (&self.pending, 0..) |*entry, index| {
+            if (!entry.active) break;
+            active_len = index + 1;
+            if (entry.active and std.mem.eql(u8, entry.idSlice(), id)) {
+                existing = index;
+            }
+        }
+        if (existing) |index| {
+            self.removePendingAt(index);
+            active_len -= 1;
+        } else if (active_len == self.pending.len) {
+            // Bound the queue by evicting the oldest unresolved request.
+            self.removePendingAt(0);
+            active_len -= 1;
+        }
+        const entry = &self.pending[active_len];
         entry.* = .{ .active = true };
         entry.id_len = @min(id.len, entry.id.len);
         @memcpy(entry.id[0..entry.id_len], id[0..entry.id_len]);
@@ -219,8 +236,12 @@ const RolloutState = struct {
     }
 
     fn resolvePending(self: *RolloutState, id: []const u8) void {
-        for (&self.pending) |*entry| {
-            if (entry.active and std.mem.eql(u8, entry.idSlice(), id)) entry.active = false;
+        for (&self.pending, 0..) |*entry, index| {
+            if (!entry.active) return;
+            if (std.mem.eql(u8, entry.idSlice(), id)) {
+                self.removePendingAt(index);
+                return;
+            }
         }
     }
 
@@ -425,10 +446,18 @@ const ProviderEvent = struct {
         hash.update(self.parentSlice());
         hash.update(self.text.slice());
         hash.update(self.title.slice());
+        hash.update(self.cwd.slice());
         hash.update(self.messageIdSlice());
         hash.update(self.requestIdSlice());
         hash.update(self.resolvesRequestIdSlice());
-        hash.update(&.{ @intFromEnum(self.status), @intFromBool(self.subagent) });
+        hash.update(self.labelSlice());
+        hash.update(&.{
+            @intFromEnum(self.status),
+            @intFromEnum(self.message_kind),
+            @intFromEnum(self.title_source),
+            @intFromBool(self.subagent),
+            @intFromBool(self.explicit_lifecycle),
+        });
         return hash.final();
     }
 };
@@ -2058,6 +2087,53 @@ test "pending input survives initial reconciliation and resolves" {
     const done = parseRolloutBytes(std.testing.allocator, resolved, resolved, "").?;
     try std.testing.expectEqual(Status.completed, done.status);
     try std.testing.expectEqualStrings("Finished", done.text.slice());
+}
+
+test "resolving an older request keeps later pending prompts ordered" {
+    var state: RolloutState = .{};
+    state.setPending("q1", "First question");
+    state.setPending("q2", "Second question");
+    state.resolvePending("q1");
+    state.setPending("q3", "Newest question");
+    try std.testing.expectEqualStrings("Newest question", state.newestPending().?.text.slice());
+    state.resolvePending("q3");
+    try std.testing.expectEqualStrings("Second question", state.newestPending().?.text.slice());
+}
+
+test "updating a pending request moves it to the newest position" {
+    var state: RolloutState = .{};
+    state.setPending("q1", "First question");
+    state.setPending("q2", "Second question");
+    state.setPending("q1", "Updated first question");
+    try std.testing.expectEqualStrings("Updated first question", state.newestPending().?.text.slice());
+    state.resolvePending("q1");
+    try std.testing.expectEqualStrings("Second question", state.newestPending().?.text.slice());
+}
+
+test "provider digest includes presentation-only metadata" {
+    var baseline: ProviderEvent = .{ .status = .running };
+    setBounded(&baseline.session, &baseline.session_len, "session");
+    const original = baseline.digest();
+
+    var changed = baseline;
+    changed.cwd.set("/new/cwd");
+    try std.testing.expect(original != changed.digest());
+
+    changed = baseline;
+    setBounded(&changed.label, &changed.label_len, "Reviewer");
+    try std.testing.expect(original != changed.digest());
+
+    changed = baseline;
+    changed.message_kind = .assistant;
+    try std.testing.expect(original != changed.digest());
+
+    changed = baseline;
+    changed.title_source = .server;
+    try std.testing.expect(original != changed.digest());
+
+    changed = baseline;
+    changed.explicit_lifecycle = true;
+    try std.testing.expect(original != changed.digest());
 }
 
 test "bare Codex completion clears transient copy but retains assistant prose" {

@@ -116,7 +116,7 @@ keys = (
     "petdex_conversation_key", "parent_session_id", "petdex_parent_session_id", "child_session_id",
     "petdex_session_kind", "petdex_subagent_label", "child_role", "prompt", "user_message", "userPrompt",
     "petdex_session_title", "notification_type", "notification_kind", "tool_name", "question", "description",
-    "command", "file_path", "path", "pattern", "query", "last_assistant_message", "assistant_response",
+    "command", "file_path", "path", "pattern", "query", "last_assistant_message", "assistant_response", "prompt_response",
     "message", "child_summary", "cwd", "turn_id", "message_id", "event_id", "call_id", "request_id",
     "tool_use_id",
 )
@@ -464,6 +464,7 @@ busy=false
 text=
 session_status=idle
 message_kind=status
+agent_state=
 post_bubble=true
 notification_kind=$(id_field notification_type)
 [ -n "$notification_kind" ] || notification_kind=$(id_field notification_kind)
@@ -540,8 +541,10 @@ case "$phase" in
         ;;
     tool-failure)
         state=failed
-        session_status=failed
+        busy=true
+        session_status=running
         message_kind=tool
+        agent_state=failed
         text="Tool failed"
         [ "$agent" = "codex" ] && post_bubble=false
         ;;
@@ -572,6 +575,7 @@ case "$phase" in
         message_kind=assistant
         text=$(text_field assistant_response 960)
         [ -n "$text" ] || text=$(text_field last_assistant_message 960)
+        [ -n "$text" ] || text=$(text_field prompt_response 960)
         [ -n "$text" ] || text=$(text_field message 960)
         [ -n "$text" ] || text="Done."
         ;;
@@ -666,6 +670,7 @@ if [ -n "$text" ] && $post_bubble; then
     [ -n "$subagent_label" ] && metadata="$metadata,\"subagent_label\":\"$subagent_label\""
     [ -n "$title" ] && metadata="$metadata,\"title\":\"$title\""
     metadata="$metadata,\"title_source\":\"$title_source\",\"feed_source\":\"hook\",\"event_kind\":\"$phase\",\"message_kind\":\"$message_kind\",\"status\":\"$session_status\""
+    [ -n "$agent_state" ] && metadata="$metadata,\"agent_state\":\"$agent_state\""
     [ -n "$notification_kind" ] && metadata="$metadata,\"notification_kind\":\"$notification_kind\""
     source_cwd=$(text_field cwd 240)
     [ -n "$source_cwd" ] && metadata="$metadata,\"source_cwd\":\"$source_cwd\""
