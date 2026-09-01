@@ -639,6 +639,13 @@ case "$phase" in
         ;;
 esac
 
+# Every visible bubble replaces the prior per-conversation Flock state. A
+# tool failure is intermediate; later progress and terminal events must carry
+# their current state instead of leaving the previous `failed` value sticky.
+if [ -n "$text" ] && $post_bubble; then
+    agent_state=$state
+fi
+
 post() {
     # -m 2: the tunnel adds latency the local 300ms budget never sees,
     # but a wedged tunnel still must not stall the agent.

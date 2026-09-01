@@ -1445,12 +1445,35 @@ const Server = struct {
     }
 };
 
-/// Spawn the listener thread. Never blocks the caller; failures to
-/// bind are printed and the thread exits (the desktop keeps running,
-/// hooks just get connection refused, same as a dead sidecar).
-pub fn start(allocator: std.mem.Allocator, home: []const u8) !void {
+pub const StartResult = enum {
+    listening,
+    unavailable,
+
+    pub fn ownsListener(self: StartResult) bool {
+        return self == .listening;
+    }
+};
+
+const StartupState = enum(u8) { pending, listening, unavailable };
+const StartupHandshake = struct {
+    state: std.atomic.Value(StartupState) = .init(.pending),
+    ready: std.Io.Event = .unset,
+
+    fn publish(self: *StartupHandshake, io: std.Io, state: StartupState) void {
+        self.state.store(state, .release);
+        self.ready.set(io);
+    }
+};
+
+/// Spawn the listener thread and wait only for its bind/token startup.
+/// The result is an ownership contract: a second Petdex process may keep its
+/// UI running, but must not create process-local credentials for remotes whose
+/// tunnel actually terminates at the first process's listener.
+pub fn start(allocator: std.mem.Allocator, home: []const u8) !StartResult {
     const runtime_dir = try std.fs.path.join(allocator, &.{ home, ".petdex", "runtime" });
+    errdefer allocator.free(runtime_dir);
     const server = try allocator.create(Server);
+    errdefer allocator.destroy(server);
     server.* = .{
         .allocator = allocator,
         .runtime_dir = runtime_dir,
@@ -1460,11 +1483,27 @@ pub fn start(allocator: std.mem.Allocator, home: []const u8) !void {
     var raw: [32]u8 = undefined;
     try fillRandom(&raw);
     _ = std.fmt.bufPrint(&server.token, "{x}", .{&raw}) catch unreachable;
-    const thread = try std.Thread.spawn(.{}, run, .{server});
-    thread.detach();
+    var handshake: StartupHandshake = .{};
+    const thread = try std.Thread.spawn(.{}, run, .{ server, &handshake });
+    var scope = plat.Scope.init();
+    defer scope.deinit();
+    handshake.ready.waitUncancelable(scope.io());
+    switch (handshake.state.load(.acquire)) {
+        .pending => unreachable,
+        .listening => {
+            thread.detach();
+            return .listening;
+        },
+        .unavailable => {
+            thread.join();
+            allocator.free(runtime_dir);
+            allocator.destroy(server);
+            return .unavailable;
+        },
+    }
 }
 
-fn run(server: *Server) void {
+fn run(server: *Server, handshake: *StartupHandshake) void {
     // This thread owns its Io for its whole life: the listener blocks
     // in accept() forever and must never touch the main thread's.
     var scope = plat.Scope.init();
@@ -1481,6 +1520,7 @@ fn run(server: *Server) void {
         .mode = .stream,
         .protocol = .tcp,
     }) catch {
+        handshake.publish(io, .unavailable);
         std.debug.print("petdex: :7777 bind failed; is another petdex running?\n", .{});
         return;
     };
@@ -1490,6 +1530,7 @@ fn run(server: *Server) void {
     // fail to bind; it must not invalidate the token of the listener that is
     // already serving hooks.
     writeRuntimeFile(server, "update-token", &server.token, 0o600) catch |err| {
+        handshake.publish(io, .unavailable);
         std.debug.print("petdex: token write failed ({s})\n", .{@errorName(err)});
         return;
     };
@@ -1498,6 +1539,7 @@ fn run(server: *Server) void {
     // Installation is not connection. Each Petdex process requires a fresh
     // event from the plugin before Settings may show DSH as connected.
     deleteRuntimeFile(server, "dsh-handshake.json");
+    handshake.publish(io, .listening);
     std.debug.print("petdex: hook server on 127.0.0.1:7777 (in-process)\n", .{});
 
     while (true) {
@@ -2301,6 +2343,11 @@ test "bounded decoded strings preserve utf8 boundaries" {
     try std.testing.expectEqualStrings("ab", boundedUtf8("ab🙂", 5).?);
     try std.testing.expectEqualStrings("ab🙂", boundedUtf8("ab🙂", 6).?);
     try std.testing.expect(boundedUtf8(&.{0xff}, 8) == null);
+}
+
+test "only a listening hook server owns remote supervision" {
+    try std.testing.expect(StartResult.listening.ownsListener());
+    try std.testing.expect(!StartResult.unavailable.ownsListener());
 }
 
 test "authenticated provenance rejects contradictory body claims" {

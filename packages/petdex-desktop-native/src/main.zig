@@ -2141,13 +2141,19 @@ pub fn boot(model: *Model, fx: *Effects) void {
         if (migration.failed > 0) {
             std.debug.print("petdex: {d} legacy hook configuration(s) could not be migrated; repair the config and update the affected agent in Settings\n", .{migration.failed});
         }
-        hook_server.start(boot_allocator, home) catch |err| {
+        var owns_hook_listener = false;
+        if (hook_server.start(boot_allocator, home)) |result| {
+            owns_hook_listener = result.ownsListener();
+        } else |err| {
             std.debug.print("petdex: hook server failed to start ({s})\n", .{@errorName(err)});
-        };
+        }
         session_reconcile.start(boot_allocator, home) catch |err| {
             std.debug.print("petdex: local session recovery failed to start ({s})\n", .{@errorName(err)});
         };
-        startRemotes(model, fx);
+        // Remote credentials live in the hook listener's process-local
+        // registry. A secondary desktop forwarding to the first process must
+        // not supervise tunnels with credentials that listener cannot know.
+        if (owns_hook_listener) startRemotes(model, fx);
     }
     loadAuthSession(model, fx);
     fx.startTimer(.{
