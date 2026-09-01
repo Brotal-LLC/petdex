@@ -931,12 +931,10 @@ fn followJournals(watcher: *Watcher, io: std.Io, now_ms: i64) void {
         if (!watch.used) continue;
         const info = fileInfo(io, watch.pathSlice()) orelse continue;
         if (info.size == watch.size and info.mtime_ms == watch.mtime_ms) continue;
-        watch.size = info.size;
-        watch.mtime_ms = info.mtime_ms;
         const bytes = readBounded(io, watcher.allocator, watch.pathSlice(), max_rollout_bytes, true) orelse continue;
         defer watcher.allocator.free(bytes);
+        const status = acceptParsedStamp(watch, info.size, info.mtime_ms, journalStatus(bytes)) orelse continue;
         replayJournalBytes(&hook_server.mailbox, bytes);
-        const status = journalStatus(bytes) orelse continue;
         if (status != .running and status != .needs_input) watch.used = false;
     }
 }
@@ -1461,7 +1459,7 @@ fn followProviders(watcher: *Watcher, io: std.Io, now_ms: i64) void {
         if (!watch.used) continue;
         const info = fileInfo(io, watch.pathSlice()) orelse continue;
         if (info.size == watch.size and info.mtime_ms == watch.mtime_ms) continue;
-        const event = acceptProviderParse(
+        const event = acceptParsedStamp(
             watch,
             info.size,
             info.mtime_ms,
@@ -1474,8 +1472,8 @@ fn followProviders(watcher: *Watcher, io: std.Io, now_ms: i64) void {
 /// A failed read is not evidence that a changed provider file was consumed.
 /// Keep the last successfully parsed stamp so the next poll retries the same
 /// bytes instead of suppressing them as already observed.
-fn acceptProviderParse(watch: *ProviderWatch, size: u64, mtime_ms: i64, event: ?ProviderEvent) ?ProviderEvent {
-    const parsed = event orelse return null;
+fn acceptParsedStamp(watch: anytype, size: u64, mtime_ms: i64, parsed_result: anytype) @TypeOf(parsed_result) {
+    const parsed = parsed_result orelse return null;
     watch.size = size;
     watch.mtime_ms = mtime_ms;
     return parsed;
@@ -2076,9 +2074,12 @@ fn follow(watcher: *Watcher, io: std.Io, now_ms: i64) void {
         if (!watch.used) continue;
         const info = fileInfo(io, watch.pathSlice()) orelse continue;
         if (!watch.force and info.size == watch.size and info.mtime_ms == watch.mtime_ms) continue;
-        watch.size = info.size;
-        watch.mtime_ms = info.mtime_ms;
-        const event = parseRollout(io, watcher.allocator, watch.pathSlice(), watch.title.slice()) orelse continue;
+        const event = acceptParsedStamp(
+            watch,
+            info.size,
+            info.mtime_ms,
+            parseRollout(io, watcher.allocator, watch.pathSlice(), watch.title.slice()),
+        ) orelse continue;
         publish(watch, event);
     }
 }
@@ -2337,18 +2338,37 @@ test "unchanged terminal provider tombstones suppress rediscovery" {
     try std.testing.expectEqual(@as(usize, 0), watcher.provider_watches[0].path_len);
 }
 
-test "provider stamps advance only after a successful parse" {
+test "file watch stamps advance only after a successful parse" {
     var watch: ProviderWatch = .{ .used = true, .size = 1024, .mtime_ms = 10 };
 
-    try std.testing.expectEqual(@as(?ProviderEvent, null), acceptProviderParse(&watch, 2048, 20, null));
+    try std.testing.expectEqual(@as(?ProviderEvent, null), acceptParsedStamp(&watch, 2048, 20, @as(?ProviderEvent, null)));
     try std.testing.expectEqual(@as(u64, 1024), watch.size);
     try std.testing.expectEqual(@as(i64, 10), watch.mtime_ms);
 
     const event: ProviderEvent = .{ .status = .running };
-    const accepted = acceptProviderParse(&watch, 2048, 20, event) orelse return error.TestUnexpectedResult;
+    const accepted = acceptParsedStamp(&watch, 2048, 20, @as(?ProviderEvent, event)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(Status.running, accepted.status);
     try std.testing.expectEqual(@as(u64, 2048), watch.size);
     try std.testing.expectEqual(@as(i64, 20), watch.mtime_ms);
+
+    var rollout: Watch = .{ .used = true, .size = 4096, .mtime_ms = 30 };
+    try std.testing.expectEqual(@as(?Event, null), acceptParsedStamp(&rollout, 8192, 40, @as(?Event, null)));
+    try std.testing.expectEqual(@as(u64, 4096), rollout.size);
+    try std.testing.expectEqual(@as(i64, 30), rollout.mtime_ms);
+
+    const rollout_event: Event = .{ .status = .running, .text = .{}, .title = .{}, .cwd = .{}, .busy = true };
+    _ = acceptParsedStamp(&rollout, 8192, 40, @as(?Event, rollout_event)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 8192), rollout.size);
+    try std.testing.expectEqual(@as(i64, 40), rollout.mtime_ms);
+
+    var journal: JournalWatch = .{ .used = true, .size = 16_384, .mtime_ms = 50 };
+    try std.testing.expectEqual(@as(?Status, null), acceptParsedStamp(&journal, 32_768, 60, @as(?Status, null)));
+    try std.testing.expectEqual(@as(u64, 16_384), journal.size);
+    try std.testing.expectEqual(@as(i64, 50), journal.mtime_ms);
+
+    try std.testing.expectEqual(Status.running, acceptParsedStamp(&journal, 32_768, 60, @as(?Status, .running)).?);
+    try std.testing.expectEqual(@as(u64, 32_768), journal.size);
+    try std.testing.expectEqual(@as(i64, 60), journal.mtime_ms);
 }
 
 test "Hermes portable schema distinguishes continuations workers input and failure" {

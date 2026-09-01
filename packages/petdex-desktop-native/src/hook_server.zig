@@ -1036,6 +1036,19 @@ pub const Mailbox = struct {
                     .remote = remote,
                 })) continue;
             } else if (!std.mem.eql(u8, b.sessionSlice(), conversation)) continue;
+            // The HTTP route applies the canonical bubble update first and
+            // then lowers its optional agent_state through this setter. An
+            // unchanged heartbeat must not restore an animated Flock state
+            // after stale suppression; meaningful work clears the marker in
+            // applyBubbleUpdate before reaching this point.
+            if (b.stale_running_suppressed) {
+                if (b.agent_state_len > 0) {
+                    @memset(&b.agent_state, 0);
+                    b.agent_state_len = 0;
+                    self.bubbles_dirty = true;
+                }
+                return;
+            }
             const n = @min(state.len, b.agent_state.len);
             @memcpy(b.agent_state[0..n], state[0..n]);
             @memset(b.agent_state[n..], 0);
@@ -1057,6 +1070,8 @@ pub const Mailbox = struct {
             if (now_ms - bubble.last_meaningful_activity_ms < grace_ms) continue;
             bubble.status = .idle;
             bubble.busy = false;
+            @memset(&bubble.agent_state, 0);
+            bubble.agent_state_len = 0;
             bubble.stale_running_suppressed = true;
             self.bubble_counter += 1;
             bubble.counter = self.bubble_counter;
@@ -3103,13 +3118,16 @@ test "stale running cards become idle until meaningful work resumes" {
         .message_kind = .tool,
         .status = .running,
     });
+    mb.setBubbleAgentStateIdentity("alpha", "review", "codex", "", false, true);
     var out: [max_bubbles]Bubble = @splat(.{});
     _ = mb.takeBubbles(&out);
+    try std.testing.expectEqualStrings("review", out[0].agentStateSlice());
     const last_activity = out[0].last_meaningful_activity_ms;
     try std.testing.expectEqual(@as(usize, 1), mb.suppressStaleRunning(last_activity + 30_000, 30_000));
     try std.testing.expectEqual(@as(u64, 1), mb.bubbleRenderDebugCounters().stale_transitions);
     try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
     try std.testing.expectEqual(SessionStatus.idle, out[0].status);
+    try std.testing.expectEqual(@as(usize, 0), out[0].agent_state_len);
     try std.testing.expect(out[0].stale_running_suppressed);
 
     // A replayed heartbeat cannot restart the animation.
@@ -3123,6 +3141,8 @@ test "stale running cards become idle until meaningful work resumes" {
         .message_kind = .tool,
         .status = .running,
     });
+    mb.setBubbleAgentStateIdentity("alpha", "review", "codex", "", false, true);
+    try std.testing.expectEqual(@as(usize, 0), mb.bubbles[0].agent_state_len);
     try std.testing.expectEqual(@as(?usize, null), mb.takeBubbles(&out));
 
     _ = mb.applyBubbleUpdate(.{
@@ -3135,8 +3155,10 @@ test "stale running cards become idle until meaningful work resumes" {
         .message_kind = .tool,
         .status = .running,
     });
+    mb.setBubbleAgentStateIdentity("alpha", "running", "codex", "", false, true);
     try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
     try std.testing.expectEqual(SessionStatus.running, out[0].status);
+    try std.testing.expectEqualStrings("running", out[0].agentStateSlice());
     try std.testing.expect(!out[0].stale_running_suppressed);
 }
 
