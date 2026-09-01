@@ -2,6 +2,7 @@
 // Forwards OpenCode lifecycle events to the petdex desktop mascot via HTTP.
 // Edit STATE_MAP below to customize which state each event triggers.
 
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -17,9 +18,8 @@ const REMOTE_HOST_PATH = join(RUNTIME_DIR, "remote-host");
 const JOURNAL_DIR = join(RUNTIME_DIR, "session-journal");
 const JOURNAL_LIMIT = 4 * 1024 * 1024;
 
-function journalStem(value, fallback) {
-  const safe = String(value || fallback).replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return safe.slice(0, 96) || fallback;
+export function journalStem(value, fallback) {
+  return createHash("sha256").update(String(value || fallback), "utf8").digest("hex");
 }
 
 function appendJournal(body) {

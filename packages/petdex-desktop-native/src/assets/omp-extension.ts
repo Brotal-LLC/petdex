@@ -10,6 +10,7 @@
 // Each pi.on handler below maps one OMP event to one mascot state; edit
 // the state strings there to change what the pet does.
 
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -31,12 +32,13 @@ const AGENT_SOURCE = "omp";
 const JOURNAL_DIR = join(RUNTIME_DIR, "session-journal");
 const JOURNAL_LIMIT = 4 * 1024 * 1024;
 
-function journalStem(
+export function journalStem(
   value: string | null | undefined,
   fallback: string,
 ): string {
-  const safe = String(value || fallback).replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return safe.slice(0, 96) || fallback;
+  return createHash("sha256")
+    .update(String(value || fallback), "utf8")
+    .digest("hex");
 }
 
 function appendJournal(body: Record<string, unknown>): void {

@@ -205,15 +205,12 @@ fn effectiveHookPhase(raw_phase: []const u8, agent: []const u8, payload: []const
     return "tool-failure";
 }
 
-fn journalSafeStem(out: []u8, raw: []const u8, fallback: []const u8) []const u8 {
+fn journalHashStem(out: *[std.crypto.hash.sha2.Sha256.digest_length * 2]u8, raw: []const u8, fallback: []const u8) []const u8 {
     const source = if (raw.len > 0) raw else fallback;
-    var written: usize = 0;
-    for (source) |byte| {
-        if (written == out.len) break;
-        out[written] = if (std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_' or byte == '.') byte else '_';
-        written += 1;
-    }
-    return out[0..written];
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    out.* = std.fmt.bytesToHex(digest, .lower);
+    return out;
 }
 
 fn appendJournalEvent(home: []const u8, agent: []const u8, conversation: ?[]const u8, body: []const u8) void {
@@ -221,16 +218,30 @@ fn appendJournalEvent(home: []const u8, agent: []const u8, conversation: ?[]cons
     const dir = std.fmt.bufPrint(&dir_buf, "{s}/.petdex/runtime/session-journal", .{home}) catch return;
     if (!plat.makeDirMode(dir, 0o700)) return;
 
-    var agent_buf: [32]u8 = undefined;
-    var conversation_buf: [96]u8 = undefined;
-    const agent_stem = journalSafeStem(&agent_buf, agent, "agent");
-    const conversation_stem = journalSafeStem(&conversation_buf, conversation orelse "", "unkeyed");
+    var agent_buf: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
+    var conversation_buf: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
+    const agent_stem = journalHashStem(&agent_buf, agent, "agent");
+    const conversation_stem = journalHashStem(&conversation_buf, conversation orelse "", "unkeyed");
     var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/{s}-{s}.jsonl", .{ dir, agent_stem, conversation_stem }) catch return;
 
     var record_buf: [post_body_capacity + 64]u8 = undefined;
     const record = std.fmt.bufPrint(&record_buf, "{{\"journal_version\":{d},\"event\":{s}}}\n", .{ journal_version, body }) catch return;
     _ = plat.appendFileModeRotating(path, record, 0o600, journal_rotate_bytes);
+}
+
+test "journal stems preserve punctuation-distinct identities" {
+    var slash_buf: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
+    var colon_buf: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
+    var fallback_buf: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
+    const slash = journalHashStem(&slash_buf, "team/a", "unkeyed");
+    const colon = journalHashStem(&colon_buf, "team:a", "unkeyed");
+    const fallback = journalHashStem(&fallback_buf, "", "unkeyed");
+
+    try std.testing.expectEqualStrings("65f838a2fbff37d81a09242f44268f116e339d56e03dec44785d0badda4b1341", slash);
+    try std.testing.expectEqualStrings("5752fddeb3d6826d1281d4ecd54493c1eca7c0d93bf64bae0ff098c833f1fee3", colon);
+    try std.testing.expectEqualStrings("d43eaed1b24b2617fb850c9c81dd86891d3b64edbb62712c94f08b8b32279ebf", fallback);
+    try std.testing.expect(!std.mem.eql(u8, slash, colon));
 }
 
 /// Local Codex rollouts contain the same user-visible `agent_message` and
