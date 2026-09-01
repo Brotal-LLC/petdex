@@ -741,20 +741,18 @@ pub fn installOmp(allocator: std.mem.Allocator, home: []const u8) bool {
 /// shape but never Claude's own file, so it needs its own row instead of
 /// a second config root on the Claude one.
 ///
-/// CodeBuddy exposes the Claude-shaped documented lifecycle, including
-/// explicit failure, permission, and subagent events. The unrelated long tail
-/// remains deliberately unwired because it has no stable payload contract.
+/// CodeBuddy documents only the Claude-shaped core below. Its larger event
+/// enum is not a payload contract, so unrelated names remain unwired.
+/// In particular, tool failure is `tool_response.success == false` on the
+/// supported PostToolUse payload and is lowered by hook_runner; there is no
+/// separate failure hook to install.
 const codebuddy_events = [_]HookEvent{
     .{ .event = "SessionStart", .phase = "session-start" },
     .{ .event = "UserPromptSubmit", .phase = "user-prompt" },
     .{ .event = "PreToolUse", .phase = "pre" },
     .{ .event = "PostToolUse", .phase = "post" },
-    .{ .event = "PostToolUseFailure", .phase = "tool-failure" },
-    .{ .event = "PermissionRequest", .phase = "approval-request" },
     .{ .event = "Notification", .phase = "notification" },
-    .{ .event = "SubagentStart", .phase = "subagent-start" },
     .{ .event = "SubagentStop", .phase = "subagent-stop" },
-    .{ .event = "StopFailure", .phase = "tool-failure" },
     .{ .event = "Stop", .phase = "stop" },
     .{ .event = "SessionEnd", .phase = "session-end" },
 };
@@ -3016,7 +3014,10 @@ test "codebuddy merges into its own config and leaves Claude's alone" {
     var pb: [512]u8 = undefined;
     const cfg = std.fmt.bufPrint(&pb, "{s}/.codebuddy/settings.json", .{home}) catch unreachable;
     try t.expect(writeFile(cfg,
-        \\{"model":"codebuddy-pro","hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"my-own-hook"}]}]}}
+        \\{"model":"codebuddy-pro","hooks":{
+        \\  "PreToolUse":[{"hooks":[{"type":"command","command":"my-own-hook"}]}],
+        \\  "PostToolUseFailure":[{"hooks":[{"type":"command","command":"$HOME/.petdex/bin/petdex-hook bubble tool-failure codebuddy"}]}]
+        \\}}
     ));
     // A Claude config that must not be touched: CodeBuddy is derived from
     // Claude Code, so writing to the wrong file is the plausible mistake.
@@ -3030,6 +3031,10 @@ test "codebuddy merges into its own config and leaves Claude's alone" {
     try t.expect(std.mem.indexOf(u8, written, "petdex-hook") != null);
     try t.expect(std.mem.indexOf(u8, written, "my-own-hook") != null);
     try t.expect(std.mem.indexOf(u8, written, "codebuddy-pro") != null);
+    try t.expect(std.mem.indexOf(u8, written, "bubble post codebuddy") != null);
+    try t.expect(std.mem.indexOf(u8, written, "bubble tool-failure codebuddy") == null);
+    try t.expect(std.mem.indexOf(u8, written, "bubble approval-request codebuddy") == null);
+    try t.expect(std.mem.indexOf(u8, written, "bubble subagent-start codebuddy") == null);
 
     const claude_after = readFileAlloc(t.allocator, claude_cfg, 1024 * 1024).?;
     defer t.allocator.free(claude_after);
@@ -3051,19 +3056,15 @@ test "codebuddy wires the documented lifecycle without guessing at unrelated eve
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
-        "PostToolUseFailure",
-        "PermissionRequest",
         "Notification",
-        "SubagentStart",
         "SubagentStop",
-        "StopFailure",
         "Stop",
         "SessionEnd",
     };
     try t.expectEqual(expected.len, codebuddy_events.len);
     for (expected, codebuddy_events) |event, hook| try t.expectEqualStrings(event, hook.event);
-    try t.expectEqual(@as(usize, 2), hookPhaseCount(&codebuddy_events, "tool-failure"));
-    try t.expectEqual(@as(usize, 1), hookPhaseCount(&codebuddy_events, "subagent-start"));
+    try t.expectEqual(@as(usize, 0), hookPhaseCount(&codebuddy_events, "tool-failure"));
+    try t.expectEqual(@as(usize, 0), hookPhaseCount(&codebuddy_events, "subagent-start"));
     try t.expectEqual(@as(usize, 1), hookPhaseCount(&codebuddy_events, "subagent-stop"));
 }
 

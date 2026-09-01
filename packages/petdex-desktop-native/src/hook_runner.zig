@@ -32,7 +32,7 @@ const journal_rotate_bytes: u64 = 4 * 1024 * 1024;
 
 /// argv tail after "bubble": [phase, agent?]. Reads stdin, formats,
 /// POSTs bubble + state to the in-process hook server. Never fails outward.
-pub fn run(phase: []const u8, arg_agent: ?[]const u8, origin_app: plat.OriginApplication, source_cwd_raw: ?[]const u8, herdr_pane_raw: ?[]const u8, home: []const u8) void {
+pub fn run(raw_phase: []const u8, arg_agent: ?[]const u8, origin_app: plat.OriginApplication, source_cwd_raw: ?[]const u8, herdr_pane_raw: ?[]const u8, home: []const u8) void {
     // Always finish consuming the host's payload before any early return.
     // The host may still be writing after the useful 64 KiB prefix, and
     // closing the read end early propagates EPIPE/Broken pipe to the agent.
@@ -48,6 +48,7 @@ pub fn run(phase: []const u8, arg_agent: ?[]const u8, origin_app: plat.OriginApp
     } else |_| {}
 
     const agent = resolveAgent(payload, arg_agent);
+    const phase = effectiveHookPhase(raw_phase, agent, payload);
     const effective_origin: plat.OriginApplication = if (origin_app == .none and std.ascii.eqlIgnoreCase(agent, "codex")) .codex else origin_app;
     const source_app = effective_origin.wireName();
     var tty_buf: [64]u8 = undefined;
@@ -185,6 +186,23 @@ fn resolveAgent(payload: []const u8, arg_agent: ?[]const u8) []const u8 {
         if (agent.len > 0) return agent;
     }
     return jsonString(payload, "agent_source") orelse "";
+}
+
+/// CodeBuddy has no distinct failure callback in the documented core hook
+/// contract. Its PostToolUse payload instead carries a structured response;
+/// recognize only the explicit boolean signal so arbitrary tool output or a
+/// user-controlled nested `success` field cannot manufacture a failed state.
+fn effectiveHookPhase(raw_phase: []const u8, agent: []const u8, payload: []const u8) []const u8 {
+    if (!std.mem.eql(u8, raw_phase, "post") or !std.ascii.eqlIgnoreCase(agent, "codebuddy")) return raw_phase;
+
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, payload, .{}) catch return raw_phase;
+    defer parsed.deinit();
+    if (parsed.value != .object) return raw_phase;
+    const response = parsed.value.object.get("tool_response") orelse return raw_phase;
+    if (response != .object) return raw_phase;
+    const success = response.object.get("success") orelse return raw_phase;
+    if (success != .bool or success.bool) return raw_phase;
+    return "tool-failure";
 }
 
 fn journalSafeStem(out: []u8, raw: []const u8, fallback: []const u8) []const u8 {
@@ -1461,6 +1479,25 @@ test "tool failures keep the session running while the agent briefly fails" {
         statusForEvent("tool-failure", "Bash", ""),
     );
     try t.expectEqualStrings("failed", stateForEvent("tool-failure", "Bash").?);
+}
+
+test "CodeBuddy derives failure only from its scoped PostToolUse success flag" {
+    const failed_payload =
+        \\{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"success":true},"tool_response":{"success":false,"error":"exit 1"}}
+    ;
+    const failed_phase = effectiveHookPhase("post", "codebuddy", failed_payload);
+    try t.expectEqualStrings("tool-failure", failed_phase);
+    try t.expectEqual(hook_server.SessionStatus.running, statusForEvent(failed_phase, "Bash", ""));
+    try t.expectEqualStrings("failed", stateForEvent(failed_phase, "Bash").?);
+    var out: [256]u8 = undefined;
+    try t.expectEqualStrings("Bash failed", formatBubble(failed_phase, failed_payload, &out).?);
+
+    const successful_payload =
+        \\{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"success":false},"tool_response":{"success":true,"error":"user prose only"}}
+    ;
+    try t.expectEqualStrings("post", effectiveHookPhase("post", "codebuddy", successful_payload));
+    try t.expectEqualStrings("post", effectiveHookPhase("post", "qoder", failed_payload));
+    try t.expectEqualStrings("post", effectiveHookPhase("post", "codebuddy", "{malformed"));
 }
 
 test "Claude notification types follow the documented attention table" {
