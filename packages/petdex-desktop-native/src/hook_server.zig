@@ -374,6 +374,42 @@ pub const BubbleUpdate = struct {
     feed_source: FeedSource = .hook,
 };
 
+/// Child summaries may arrive before bounded provider discovery has admitted
+/// their parent. Retain them outside the live bubble array so the race cannot
+/// manufacture a ghost card, lose the summary, or consume a parent slot.
+const max_deferred_child_messages = max_bubbles * max_child_messages;
+const DeferredChildMessage = struct {
+    conversation: [bubble_session_capacity]u8 = @splat(0),
+    conversation_len: usize = 0,
+    agent: [24]u8 = @splat(0),
+    agent_len: usize = 0,
+    hostname: [64]u8 = @splat(0),
+    hostname_len: usize = 0,
+    remote: bool = false,
+    message: ChildMessage = .{},
+
+    fn conversationSlice(self: *const DeferredChildMessage) []const u8 {
+        return self.conversation[0..self.conversation_len];
+    }
+
+    fn agentSlice(self: *const DeferredChildMessage) []const u8 {
+        return self.agent[0..self.agent_len];
+    }
+
+    fn hostnameSlice(self: *const DeferredChildMessage) []const u8 {
+        return self.hostname[0..self.hostname_len];
+    }
+
+    fn identity(self: *const DeferredChildMessage) BubbleIdentity {
+        return .{
+            .conversation_key = self.conversationSlice(),
+            .agent = self.agentSlice(),
+            .hostname = self.hostnameSlice(),
+            .remote = self.remote,
+        };
+    }
+};
+
 fn copyField(destination: []u8, source: []const u8) usize {
     const count = @min(destination.len, source.len);
     @memset(destination, 0);
@@ -432,6 +468,13 @@ fn childMessageEquivalent(message: *const ChildMessage, update: BubbleUpdate) bo
         std.mem.eql(u8, message.labelSlice(), if (update.subagent_label.len > 0) update.subagent_label else "Subagent") and
         std.mem.eql(u8, message.sourceSessionSlice(), update.source_session) and
         std.mem.eql(u8, message.messageIdSlice(), update.message_id);
+}
+
+fn writeChildMessage(message: *ChildMessage, update: BubbleUpdate) void {
+    message.text_len = copyField(&message.text, update.text);
+    message.label_len = copyField(&message.label, if (update.subagent_label.len > 0) update.subagent_label else "Subagent");
+    message.source_session_len = copyField(&message.source_session, update.source_session);
+    message.message_id_len = copyField(&message.message_id, update.message_id);
 }
 
 /// A provider may poll/replay a `running` status for minutes without any new
@@ -625,6 +668,8 @@ pub const Mailbox = struct {
     bubbles: [max_bubbles]Bubble = @splat(.{}),
     bubbles_len: usize = 0,
     bubbles_dirty: bool = false,
+    deferred_children: [max_deferred_child_messages]DeferredChildMessage = @splat(.{}),
+    deferred_children_len: usize = 0,
     /// Monotonic across every session, so a bubble's counter doubles as
     /// its LRU stamp: the smallest one is the least recently updated.
     bubble_counter: u64 = 0,
@@ -719,6 +764,107 @@ pub const Mailbox = struct {
         });
     }
 
+    fn attachChildMessageLocked(self: *Mailbox, parent: *Bubble, update: BubbleUpdate) u64 {
+        var duplicate: ?usize = null;
+        for (parent.child_messages[0..parent.child_messages_len], 0..) |*message, index| {
+            if (childMessageMatches(message, update)) {
+                duplicate = index;
+                break;
+            }
+        }
+        if (duplicate) |index| {
+            if (childMessageEquivalent(&parent.child_messages[index], update)) {
+                self.bubble_render_debug.suppressed_duplicates +%= 1;
+                return parent.counter;
+            }
+            // Move an updated duplicate to the tail so "two most recent" is
+            // chronological even when a provider replays an event.
+            const existing = parent.child_messages[index];
+            std.mem.copyForwards(ChildMessage, parent.child_messages[index .. parent.child_messages_len - 1], parent.child_messages[index + 1 .. parent.child_messages_len]);
+            parent.child_messages[parent.child_messages_len - 1] = existing;
+        } else {
+            if (parent.child_messages_len == max_child_messages) {
+                std.mem.copyForwards(ChildMessage, parent.child_messages[0 .. max_child_messages - 1], parent.child_messages[1..max_child_messages]);
+                parent.child_messages_len -= 1;
+            }
+            parent.child_messages[parent.child_messages_len] = .{};
+            parent.child_messages_len += 1;
+        }
+        const child = &parent.child_messages[parent.child_messages_len - 1];
+        writeChildMessage(child, update);
+        self.bubble_counter += 1;
+        child.counter = self.bubble_counter;
+        parent.counter = self.bubble_counter;
+        self.bubbles_dirty = true;
+        return parent.counter;
+    }
+
+    fn deferChildMessageLocked(self: *Mailbox, update: BubbleUpdate) u64 {
+        const update_identity: BubbleIdentity = .{
+            .conversation_key = update.conversation_key,
+            .agent = update.agent,
+            .hostname = update.hostname,
+            .remote = update.remote,
+        };
+        var duplicate: ?usize = null;
+        for (self.deferred_children[0..self.deferred_children_len], 0..) |*candidate, index| {
+            if (candidate.identity().matches(update_identity) and childMessageMatches(&candidate.message, update)) {
+                duplicate = index;
+                break;
+            }
+        }
+        if (duplicate) |index| {
+            if (childMessageEquivalent(&self.deferred_children[index].message, update)) {
+                self.bubble_render_debug.suppressed_duplicates +%= 1;
+                return self.bubble_counter;
+            }
+            const existing = self.deferred_children[index];
+            std.mem.copyForwards(DeferredChildMessage, self.deferred_children[index .. self.deferred_children_len - 1], self.deferred_children[index + 1 .. self.deferred_children_len]);
+            self.deferred_children[self.deferred_children_len - 1] = existing;
+        } else {
+            if (self.deferred_children_len == max_deferred_child_messages) {
+                std.mem.copyForwards(DeferredChildMessage, self.deferred_children[0 .. max_deferred_child_messages - 1], self.deferred_children[1..max_deferred_child_messages]);
+                self.deferred_children_len -= 1;
+            }
+            self.deferred_children[self.deferred_children_len] = .{};
+            self.deferred_children_len += 1;
+        }
+        const deferred = &self.deferred_children[self.deferred_children_len - 1];
+        deferred.conversation_len = copyField(&deferred.conversation, update.conversation_key);
+        deferred.agent_len = copyField(&deferred.agent, update.agent);
+        deferred.hostname_len = copyField(&deferred.hostname, update.hostname);
+        deferred.remote = update.remote;
+        writeChildMessage(&deferred.message, update);
+        return self.bubble_counter;
+    }
+
+    fn flushDeferredChildrenLocked(self: *Mailbox, parent: *Bubble) void {
+        var index: usize = 0;
+        while (index < self.deferred_children_len) {
+            const deferred = &self.deferred_children[index];
+            if (!deferred.identity().matches(parent.identity())) {
+                index += 1;
+                continue;
+            }
+            _ = self.attachChildMessageLocked(parent, .{
+                .conversation_key = deferred.conversationSlice(),
+                .source_session = deferred.message.sourceSessionSlice(),
+                .text = deferred.message.textSlice(),
+                .agent = deferred.agentSlice(),
+                .hostname = deferred.hostnameSlice(),
+                .message_id = deferred.message.messageIdSlice(),
+                .subagent_label = deferred.message.labelSlice(),
+                .remote = deferred.remote,
+                .session_kind = .subagent,
+                .message_kind = .assistant,
+            });
+            if (index + 1 < self.deferred_children_len)
+                std.mem.copyForwards(DeferredChildMessage, self.deferred_children[index .. self.deferred_children_len - 1], self.deferred_children[index + 1 .. self.deferred_children_len]);
+            self.deferred_children_len -= 1;
+            self.deferred_children[self.deferred_children_len] = .{};
+        }
+    }
+
     pub fn applyBubbleUpdate(self: *Mailbox, update_raw: BubbleUpdate) u64 {
         var conversation_hash: [64]u8 = undefined;
         var source_hash: [64]u8 = undefined;
@@ -756,49 +902,14 @@ pub const Mailbox = struct {
             }
         }
 
-        // A child never owns a top-level card. If its parent has not appeared
-        // yet, drop the event rather than manufacturing a blank ghost card.
-        // The next meaningful parent update will establish the aggregate.
+        // A child never owns a top-level card. Meaningful prose that wins the
+        // discovery race is retained outside the live bubble set and attached
+        // automatically after its parent arrives.
         if (update.session_kind == .subagent) {
-            const parent = matched_existing orelse return self.bubble_counter;
             if (update.message_kind != .assistant or std.mem.trim(u8, update.text, " \t\r\n").len == 0)
                 return self.bubble_counter;
-
-            var duplicate: ?usize = null;
-            for (parent.child_messages[0..parent.child_messages_len], 0..) |*message, i| {
-                if (childMessageMatches(message, update)) {
-                    duplicate = i;
-                    break;
-                }
-            }
-            if (duplicate) |index| {
-                if (childMessageEquivalent(&parent.child_messages[index], update)) {
-                    self.bubble_render_debug.suppressed_duplicates +%= 1;
-                    return self.bubble_counter;
-                }
-                // Move an updated duplicate to the tail so "two most recent"
-                // is chronological even when a provider replays an event.
-                const existing = parent.child_messages[index];
-                std.mem.copyForwards(ChildMessage, parent.child_messages[index .. parent.child_messages_len - 1], parent.child_messages[index + 1 .. parent.child_messages_len]);
-                parent.child_messages[parent.child_messages_len - 1] = existing;
-            } else {
-                if (parent.child_messages_len == max_child_messages) {
-                    std.mem.copyForwards(ChildMessage, parent.child_messages[0 .. max_child_messages - 1], parent.child_messages[1..max_child_messages]);
-                    parent.child_messages_len -= 1;
-                }
-                parent.child_messages[parent.child_messages_len] = .{};
-                parent.child_messages_len += 1;
-            }
-            var child = &parent.child_messages[parent.child_messages_len - 1];
-            child.text_len = copyField(&child.text, update.text);
-            child.label_len = copyField(&child.label, if (update.subagent_label.len > 0) update.subagent_label else "Subagent");
-            child.source_session_len = copyField(&child.source_session, update.source_session);
-            child.message_id_len = copyField(&child.message_id, update.message_id);
-            self.bubble_counter += 1;
-            child.counter = self.bubble_counter;
-            parent.counter = self.bubble_counter;
-            self.bubbles_dirty = true;
-            return parent.counter;
+            const parent = matched_existing orelse return self.deferChildMessageLocked(update);
+            return self.attachChildMessageLocked(parent, update);
         }
 
         const is_new = matched_existing == null;
@@ -841,6 +952,7 @@ pub const Mailbox = struct {
         if (update.herdr_pane.len > 0 and (metadata_wins or slot.herdr_pane_len == 0)) slot.herdr_pane_len = copyField(&slot.herdr_pane, update.herdr_pane);
         if (update.hostname.len > 0 and (metadata_wins or slot.hostname_len == 0)) slot.hostname_len = copyField(&slot.hostname, update.hostname);
         slot.remote = update.remote;
+        self.flushDeferredChildrenLocked(slot);
 
         const replace_title = update.title.len > 0 and switch (update.title_source) {
             .server => true,
@@ -1030,6 +1142,8 @@ pub const Mailbox = struct {
         self.bubbles = @splat(.{});
         self.bubbles_len = 0;
         self.bubbles_dirty = false;
+        self.deferred_children = @splat(.{});
+        self.deferred_children_len = 0;
     }
 };
 
@@ -2619,6 +2733,61 @@ test "authoritative subagent update retracts provisional child card" {
     try std.testing.expectEqualStrings("Parent is working", out[0].text[0..out[0].text_len]);
 }
 
+test "subagent prose arriving before its parent is retained by full identity" {
+    var mb: Mailbox = .{};
+    const child: BubbleUpdate = .{
+        .conversation_key = "root-conversation",
+        .source_session = "child-session",
+        .parent_session = "root-session",
+        .session_kind = .subagent,
+        .subagent_label = "Research",
+        .agent = "hermes",
+        .hostname = "host-a",
+        .remote = true,
+        .text = "The migration needs one compatibility shim.",
+        .message_id = "child-message-1",
+        .message_kind = .assistant,
+        .status = .completed,
+    };
+    _ = mb.applyBubbleUpdate(child);
+    _ = mb.applyBubbleUpdate(child);
+
+    // Deferral is invisible and deduplicated: a child cannot manufacture a
+    // ghost card while provider discovery is still admitting its parent.
+    try std.testing.expectEqual(@as(usize, 1), mb.deferred_children_len);
+    var out: [max_bubbles]Bubble = @splat(.{});
+    try std.testing.expectEqual(@as(?usize, null), mb.takeBubbles(&out));
+
+    // A colliding remote conversation on another host cannot claim it.
+    _ = mb.applyBubbleUpdate(.{
+        .conversation_key = "root-conversation",
+        .source_session = "root-session-b",
+        .agent = "hermes",
+        .hostname = "host-b",
+        .remote = true,
+        .text = "Unrelated parent",
+        .status = .running,
+    });
+    try std.testing.expectEqual(@as(?usize, 1), mb.takeBubbles(&out));
+    try std.testing.expectEqual(@as(usize, 0), out[0].child_messages_len);
+    try std.testing.expectEqual(@as(usize, 1), mb.deferred_children_len);
+
+    _ = mb.applyBubbleUpdate(.{
+        .conversation_key = "root-conversation",
+        .source_session = "root-session",
+        .agent = "hermes",
+        .hostname = "host-a",
+        .remote = true,
+        .text = "Matching parent",
+        .status = .running,
+    });
+    try std.testing.expectEqual(@as(?usize, 2), mb.takeBubbles(&out));
+    try std.testing.expectEqual(@as(usize, 0), mb.deferred_children_len);
+    try std.testing.expectEqual(@as(usize, 1), out[1].child_messages_len);
+    try std.testing.expectEqualStrings("Research", out[1].child_messages[0].labelSlice());
+    try std.testing.expectEqualStrings("The migration needs one compatibility shim.", out[1].child_messages[0].textSlice());
+}
+
 test "subagent tool noise is ignored and assistant prose folds into parent" {
     var mb: Mailbox = .{};
     _ = mb.applyBubbleUpdate(.{
@@ -3117,8 +3286,18 @@ test "dropping a session frees its slot and keeps the rest dense" {
     }
     mb.dropBubble("nobody");
     _ = mb.takeBubbles(&out);
+    _ = mb.applyBubbleUpdate(.{
+        .conversation_key = "deferred-parent",
+        .source_session = "deferred-child",
+        .session_kind = .subagent,
+        .agent = "codex",
+        .text = "Deferred summary",
+        .message_kind = .assistant,
+    });
+    try std.testing.expectEqual(@as(usize, 1), mb.deferred_children_len);
     mb.clearBubbles();
     try std.testing.expectEqual(@as(?usize, null), mb.takeBubbles(&out));
+    try std.testing.expectEqual(@as(usize, 0), mb.deferred_children_len);
 }
 
 test "json string scanner preserves escaped multiline content" {

@@ -1461,11 +1461,24 @@ fn followProviders(watcher: *Watcher, io: std.Io, now_ms: i64) void {
         if (!watch.used) continue;
         const info = fileInfo(io, watch.pathSlice()) orelse continue;
         if (info.size == watch.size and info.mtime_ms == watch.mtime_ms) continue;
-        watch.size = info.size;
-        watch.mtime_ms = info.mtime_ms;
-        const event = parseProviderFile(io, watcher.allocator, adapters[watch.adapter_index], watch.pathSlice()) orelse continue;
+        const event = acceptProviderParse(
+            watch,
+            info.size,
+            info.mtime_ms,
+            parseProviderFile(io, watcher.allocator, adapters[watch.adapter_index], watch.pathSlice()),
+        ) orelse continue;
         publishProvider(watch, event);
     }
+}
+
+/// A failed read is not evidence that a changed provider file was consumed.
+/// Keep the last successfully parsed stamp so the next poll retries the same
+/// bytes instead of suppressing them as already observed.
+fn acceptProviderParse(watch: *ProviderWatch, size: u64, mtime_ms: i64, event: ?ProviderEvent) ?ProviderEvent {
+    const parsed = event orelse return null;
+    watch.size = size;
+    watch.mtime_ms = mtime_ms;
+    return parsed;
 }
 
 const WindowsLibrary = struct {
@@ -2322,6 +2335,20 @@ test "unchanged terminal provider tombstones suppress rediscovery" {
 
     try std.testing.expect(findProviderWatch(&watcher, 2, "gemini/child.jsonl", 4100, 43) == null);
     try std.testing.expectEqual(@as(usize, 0), watcher.provider_watches[0].path_len);
+}
+
+test "provider stamps advance only after a successful parse" {
+    var watch: ProviderWatch = .{ .used = true, .size = 1024, .mtime_ms = 10 };
+
+    try std.testing.expectEqual(@as(?ProviderEvent, null), acceptProviderParse(&watch, 2048, 20, null));
+    try std.testing.expectEqual(@as(u64, 1024), watch.size);
+    try std.testing.expectEqual(@as(i64, 10), watch.mtime_ms);
+
+    const event: ProviderEvent = .{ .status = .running };
+    const accepted = acceptProviderParse(&watch, 2048, 20, event) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Status.running, accepted.status);
+    try std.testing.expectEqual(@as(u64, 2048), watch.size);
+    try std.testing.expectEqual(@as(i64, 20), watch.mtime_ms);
 }
 
 test "Hermes portable schema distinguishes continuations workers input and failure" {
